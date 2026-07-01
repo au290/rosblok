@@ -447,6 +447,12 @@ async def logs(i: discord.Interaction, n: int, lines: int = 15):
     await i.response.send_message(f"[{PHONE}] hopper{n}:\n```\n{pane_tail(n, lines)[-1800:]}\n```")
 
 
+@bot.tree.command(name="help", description="List every command")
+async def help_cmd(i: discord.Interaction):
+    rows = [f"/{c.name} — {c.description}" for c in sorted(bot.tree.get_commands(), key=lambda c: c.name)]
+    await i.response.send_message(f"[{PHONE}] commands:\n```\n" + "\n".join(rows)[-1900:] + "\n```")
+
+
 if __name__ == "__main__":
     if TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
         raise SystemExit("Edit the CONFIG block: paste your bot TOKEN first.")
