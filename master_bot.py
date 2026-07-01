@@ -152,6 +152,11 @@ def _fetch(url: str) -> str:
     return urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
 
 
+def _lua_list(csv: str) -> str:
+    xs = [x.strip() for x in csv.split(",") if x.strip()]
+    return "{" + ", ".join(f'"{x}"' for x in xs) + "}"
+
+
 SRV_RE  = re.compile(r"RF\d+")
 PROG_RE = re.compile(r"(\d+)s\s*/\s*(\d+)s")
 
@@ -329,6 +334,31 @@ async def script_del(i: discord.Interaction, name: str):
         return await i.response.send_message(f"[{PHONE}] {f.name} not found")
     f.unlink()
     await i.response.send_message(f"[{PHONE}] deleted `{f.name}`")
+
+
+@bot.tree.command(description="util.lua: enable pet auto-trade, set receiver usernames (+ optional item IDs)")
+async def autotrade(i: discord.Interaction, usernames: str, items: str = ""):
+    f = AUTOEXEC / "util.lua"
+    if not f.exists():
+        return await i.response.send_message(f"[{PHONE}] util.lua not found in `{AUTOEXEC}`")
+    t = f.read_text(errors="replace")
+    users = _lua_list(usernames)
+    # anchor on the AutoTrade-only comments so we don't touch AutoOpen/Shop's identical fields
+    t = re.sub(r'(Enabled\s*=\s*)(?:true|false)(,\s*--\s*Start auto trading on load)',
+               lambda m: m.group(1) + "true" + m.group(2), t)
+    t = re.sub(r'(Usernames\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + users, t)
+    t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + '{"pets"}', t)
+    if items.strip():
+        its = _lua_list(items)
+        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"specific"', t)
+        t = re.sub(r'(Items\s*=\s*)\{[^}]*\}(,\s*--\s*Item IDs/names to send)',
+                   lambda m: m.group(1) + its + m.group(2), t)
+        note = f"items {its}"
+    else:
+        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"all"', t)
+        note = "all pets"
+    f.write_text(t)
+    await i.response.send_message(f"[{PHONE}] auto-trade ON → to {users}, {note}")
 
 
 @bot.tree.command(description="Live status feed — edits one message every 5s")
