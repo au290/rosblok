@@ -336,58 +336,40 @@ async def script_del(i: discord.Interaction, name: str):
     await i.response.send_message(f"[{PHONE}] deleted `{f.name}`")
 
 
-@bot.tree.command(description="util.lua: enable pet auto-trade, set receiver usernames (+ optional item IDs)")
-async def autotrade(i: discord.Interaction, usernames: str, items: str = ""):
-    f = AUTOEXEC / "util.lua"
-    if not f.exists():
-        return await i.response.send_message(f"[{PHONE}] util.lua not found in `{AUTOEXEC}`")
-    t = f.read_text(errors="replace")
-    users = _lua_list(usernames)
-    # anchor on the AutoTrade-only comments so we don't touch AutoOpen/Shop's identical fields
-    t = re.sub(r'(Enabled\s*=\s*)(?:true|false)(,\s*--\s*Start auto trading on load)',
-               lambda m: m.group(1) + "true" + m.group(2), t)
-    t = re.sub(r'(Usernames\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + users, t)
-    t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + '{"pets"}', t)
-    if items.strip():
-        its = _lua_list(items)
-        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"specific"', t)
-        t = re.sub(r'(Items\s*=\s*)\{[^}]*\}(,\s*--\s*Item IDs/names to send)',
-                   lambda m: m.group(1) + its + m.group(2), t)
-        note = f"items {its}"
-    else:
-        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"all"', t)
-        note = "all pets"
-    f.write_text(t)
-    await i.response.send_message(f"[{PHONE}] auto-trade ON → to {users}, {note}")
-
-
-@bot.tree.command(description="util.lua: auto-trade by category — toggle the ones you want. Usernames optional.")
-async def autotrade_cat(i: discord.Interaction,
-                        pets: bool = False, toys: bool = False, food: bool = False,
-                        transport: bool = False, gifts: bool = False, stickers: bool = False,
-                        pet_accessories: bool = False, usernames: str = ""):
+@bot.tree.command(description="util.lua: enable auto-trade. Toggle categories OR pass item IDs. Usernames optional.")
+async def autotrade(i: discord.Interaction,
+                    pets: bool = False, toys: bool = False, food: bool = False,
+                    transport: bool = False, gifts: bool = False, stickers: bool = False,
+                    pet_accessories: bool = False, items: str = "", usernames: str = ""):
     chosen = [c for c, on in [("pets", pets), ("toys", toys), ("food", food),
                               ("transport", transport), ("gifts", gifts),
                               ("stickers", stickers), ("pet_accessories", pet_accessories)] if on]
-    if not chosen:
-        return await i.response.send_message(f"[{PHONE}] pick at least one category")
+    if not chosen and not items.strip():
+        return await i.response.send_message(f"[{PHONE}] pick a category or pass items")
     f = AUTOEXEC / "util.lua"
     if not f.exists():
         return await i.response.send_message(f"[{PHONE}] util.lua not found in `{AUTOEXEC}`")
     t = f.read_text(errors="replace")
-    cats = _lua_list(",".join(chosen))
+    # anchor on AutoTrade-only comments so AutoOpen/Shop's identical fields are untouched
     t = re.sub(r'(Enabled\s*=\s*)(?:true|false)(,\s*--\s*Start auto trading on load)',
                lambda m: m.group(1) + "true" + m.group(2), t)
-    t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + cats, t)
-    t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"all"', t)
-    if usernames.strip():
-        users = _lua_list(usernames)
-        t = re.sub(r'(Usernames\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + users, t)
-        note = f"to {users}"
+    if chosen:
+        t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + _lua_list(",".join(chosen)), t)
+    if items.strip():
+        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"specific"', t)
+        t = re.sub(r'(Items\s*=\s*)\{[^}]*\}(,\s*--\s*Item IDs/names to send)',
+                   lambda m: m.group(1) + _lua_list(items) + m.group(2), t)
+        what = f"items {_lua_list(items)}"
     else:
-        note = "usernames left as-is"
+        t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"all"', t)
+        what = f"categories {_lua_list(','.join(chosen))}"
+    if usernames.strip():
+        t = re.sub(r'(Usernames\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + _lua_list(usernames), t)
+        who = f"to {_lua_list(usernames)}"
+    else:
+        who = "usernames as-is"
     f.write_text(t)
-    await i.response.send_message(f"[{PHONE}] auto-trade ON → categories {cats}, {note}")
+    await i.response.send_message(f"[{PHONE}] auto-trade ON → {what}, {who}")
 
 
 @bot.tree.command(description="Live status feed — edits one message every 5s")
