@@ -361,6 +361,27 @@ async def autotrade(i: discord.Interaction, usernames: str, items: str = ""):
     await i.response.send_message(f"[{PHONE}] auto-trade ON → to {users}, {note}")
 
 
+@bot.tree.command(description="util.lua: auto-trade by category (pets,toys,food,transport,gifts,stickers,pet_accessories). Usernames optional.")
+async def autotrade_cat(i: discord.Interaction, categories: str, usernames: str = ""):
+    f = AUTOEXEC / "util.lua"
+    if not f.exists():
+        return await i.response.send_message(f"[{PHONE}] util.lua not found in `{AUTOEXEC}`")
+    t = f.read_text(errors="replace")
+    cats = _lua_list(categories)
+    t = re.sub(r'(Enabled\s*=\s*)(?:true|false)(,\s*--\s*Start auto trading on load)',
+               lambda m: m.group(1) + "true" + m.group(2), t)
+    t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + cats, t)
+    t = re.sub(r'(TradeMode\s*=\s*)"[^"]*"', lambda m: m.group(1) + '"all"', t)
+    if usernames.strip():
+        users = _lua_list(usernames)
+        t = re.sub(r'(Usernames\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + users, t)
+        note = f"to {users}"
+    else:
+        note = "usernames left as-is"
+    f.write_text(t)
+    await i.response.send_message(f"[{PHONE}] auto-trade ON → categories {cats}, {note}")
+
+
 @bot.tree.command(description="Live status feed — edits one message every 5s")
 async def live(i: discord.Interaction):
     global live_msg
