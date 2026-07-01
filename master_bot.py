@@ -16,6 +16,8 @@ import discord
 from discord.ext import commands, tasks
 from pathlib import Path
 import subprocess
+import asyncio
+import urllib.request
 
 # ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
 TOKEN    = "PASTE_YOUR_BOT_TOKEN_HERE"   # better: leave this, put the token in token.txt (gitignored)
@@ -96,6 +98,8 @@ POOL_FILE = BASE_DIR / "link.txt"
 # Folder the in-game monitor writefile()s Adopt Me dumps into.
 # Point this at your executor's workspace, e.g. Path("/storage/emulated/0/Delta/workspace/inv")
 INV_DIR   = BASE_DIR / "inv"
+# Delta executor autoexec folder — scripts placed here run on injection. Edit if yours differs.
+AUTOEXEC  = Path("/storage/emulated/0/Delta/autoexec")
 
 
 def pool() -> list:
@@ -137,6 +141,15 @@ def clear_cmd(n: int):
     f = BASE_DIR / "cmd" / f"h{n}.txt"
     if f.exists():
         f.unlink()
+
+
+def _script(name: str) -> Path:
+    return AUTOEXEC / Path(name).name        # strip path parts — no escaping the autoexec folder
+
+
+def _fetch(url: str) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": "hopperbot"})
+    return urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "replace")
 
 
 SRV_RE  = re.compile(r"RF\d+")
@@ -280,6 +293,42 @@ async def inv(i: discord.Interaction):
     body = "\n".join(rows) or "(empty)"
     await i.response.send_message(
         f"[{PHONE}] inventory — {len(rows)} acct · {tot_b:,}💰 · {tot_p}🐾 total\n```\n{body[-1800:]}\n```")
+
+
+@bot.tree.command(description="List scripts in the Delta autoexec folder")
+async def scripts(i: discord.Interaction):
+    fs = [f for f in sorted(AUTOEXEC.glob("*")) if f.is_file()] if AUTOEXEC.exists() else []
+    body = "\n".join(f"{f.name}  {f.stat().st_size}b" for f in fs) or "(empty)"
+    await i.response.send_message(f"[{PHONE}] autoexec `{AUTOEXEC}`:\n```\n{body[-1800:]}\n```")
+
+
+@bot.tree.command(description="Show an autoexec script's contents")
+async def script_get(i: discord.Interaction, name: str):
+    f = _script(name)
+    if not f.exists():
+        return await i.response.send_message(f"[{PHONE}] {f.name} not found")
+    await i.response.send_message(f"[{PHONE}] {f.name}:\n```lua\n{f.read_text(errors='replace')[-1800:]}\n```")
+
+
+@bot.tree.command(description="Download a script from a URL into autoexec (create or overwrite)")
+async def script_add(i: discord.Interaction, name: str, url: str):
+    await i.response.defer()
+    try:
+        AUTOEXEC.mkdir(parents=True, exist_ok=True)
+        data = await asyncio.to_thread(_fetch, url)
+        _script(name).write_text(data)
+        await i.followup.send(f"[{PHONE}] saved `{_script(name).name}` ({len(data)}b) to autoexec")
+    except Exception as e:
+        await i.followup.send(f"[{PHONE}] curl failed: {e}")
+
+
+@bot.tree.command(description="Delete a script from the autoexec folder")
+async def script_del(i: discord.Interaction, name: str):
+    f = _script(name)
+    if not f.exists():
+        return await i.response.send_message(f"[{PHONE}] {f.name} not found")
+    f.unlink()
+    await i.response.send_message(f"[{PHONE}] deleted `{f.name}`")
 
 
 @bot.tree.command(description="Live status feed — edits one message every 5s")
