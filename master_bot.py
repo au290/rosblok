@@ -1,0 +1,350 @@
+"""
+master_bot.py — Discord control for the tmux hoppers (1-5), runs ON the phone.
+
+Setup (per phone, in Termux):
+    pkg install python tmux
+    pip install -U discord.py
+    python master_bot.py
+
+You only edit the CONFIG block below. No env vars.
+For 2 phones: copy this file to each phone and change TOKEN + PHONE on phone B.
+"""
+
+import re
+import json
+import discord
+from discord.ext import commands, tasks
+from pathlib import Path
+import subprocess
+
+# ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
+TOKEN    = "PASTE_YOUR_BOT_TOKEN_HERE"   # better: leave this, put the token in token.txt (gitignored)
+GUILD_ID = 1257246647830974515                             # your server ID (Copy Server ID) → slash cmds appear instantly. 0 = global (slow)
+PHONE    = "A"                           # label so you can tell phone A from phone B in replies
+LUA      = "lua"                         # change to "lua5.4" if `which lua` shows that
+SESSION  = "farm"                        # tmux session name
+HOPPERS  = [1, 2, 3, 4, 5]               # this phone's hoppers
+# ───────────────────────────────────────────────────────────────────────────
+
+BASE_DIR = Path(__file__).parent.resolve()
+LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
+
+# token.txt (gitignored) wins over the inline TOKEN — so master_bot.py is safe to push
+_tok = BASE_DIR / "token.txt"
+if _tok.exists():
+    TOKEN = _tok.read_text().strip()
+
+
+def tmux(*args):
+    return subprocess.run(["tmux", *args], cwd=str(BASE_DIR), capture_output=True, text=True, errors="replace")
+
+
+def session_exists() -> bool:
+    return tmux("has-session", "-t", SESSION).returncode == 0
+
+
+def windows() -> set:
+    if not session_exists():
+        return set()
+    return set(tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").stdout.split())
+
+
+def tgt(n: int) -> str:
+    return f"{SESSION}:h{n}"
+
+
+def is_running(n: int) -> bool:
+    if f"h{n}" not in windows():
+        return False
+    r = tmux("display-message", "-p", "-t", tgt(n), "#{pane_current_command}")
+    return r.stdout.strip() in LUA_CMDS
+
+
+def ensure_window(n: int):
+    if not session_exists():
+        tmux("new-session", "-d", "-s", SESSION, "-n", f"h{n}")
+    elif f"h{n}" not in windows():
+        tmux("new-window", "-d", "-t", SESSION, "-n", f"h{n}")
+
+
+def start_hopper(n: int) -> str:
+    if is_running(n):
+        return f"hopper{n} already running"
+    if not (BASE_DIR / f"hopper{n}.lua").exists():
+        return f"hopper{n}.lua not found"
+    ensure_window(n)
+    tmux("send-keys", "-t", tgt(n), f"cd '{BASE_DIR}' && {LUA} hopper{n}.lua", "Enter")
+    return f"started hopper{n}"
+
+
+def stop_hopper(n: int) -> str:
+    if f"h{n}" not in windows():
+        return f"hopper{n} not started"
+    tmux("send-keys", "-t", tgt(n), "C-c")   # Ctrl-C the lua; the tmux window/shell stays alive
+    return f"stopped hopper{n}"
+
+
+def pane_tail(n: int, lines: int = 1) -> str:
+    if f"h{n}" not in windows():
+        return "—"
+    rows = [l for l in tmux("capture-pane", "-p", "-t", tgt(n)).stdout.splitlines() if l.strip()]
+    return "\n".join(rows[-lines:]) if rows else "—"
+
+
+MAP_FILE  = BASE_DIR / "servers.txt"
+POOL_FILE = BASE_DIR / "link.txt"
+# Folder the in-game monitor writefile()s Adopt Me dumps into.
+# Point this at your executor's workspace, e.g. Path("/storage/emulated/0/Delta/workspace/inv")
+INV_DIR   = BASE_DIR / "inv"
+
+
+def pool() -> list:
+    if not POOL_FILE.exists():
+        return []
+    return [l for l in POOL_FILE.read_text().splitlines() if l.strip() and not l.startswith("#")]
+
+
+def ranges() -> dict:
+    d = {}
+    if MAP_FILE.exists():
+        for line in MAP_FILE.read_text().splitlines():
+            m = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*-\s*(\d+)", line)
+            if m:
+                d[int(m.group(1))] = (int(m.group(2)), int(m.group(3)))
+    return d
+
+
+def set_range(n: int, first: int, last: int):
+    d = ranges()
+    d[n] = (first, last)
+    body = ["# hopper : firstLink-lastLink  (line numbers in link.txt, 1-based)"]
+    body += [f"{k}: {d[k][0]}-{d[k][1]}" for k in sorted(d)]
+    MAP_FILE.write_text("\n".join(body) + "\n")
+
+
+def hopper_links(n: int) -> list:
+    first, last = ranges().get(n, (1, 0))
+    return pool()[first - 1:last]
+
+
+def write_cmd(n: int, c: str):
+    d = BASE_DIR / "cmd"
+    d.mkdir(exist_ok=True)
+    (d / f"h{n}.txt").write_text(c)
+
+
+def clear_cmd(n: int):
+    f = BASE_DIR / "cmd" / f"h{n}.txt"
+    if f.exists():
+        f.unlink()
+
+
+SRV_RE  = re.compile(r"RF\d+")
+PROG_RE = re.compile(r"(\d+)s\s*/\s*(\d+)s")
+
+
+def _parse(n: int):
+    """Pull (server, elapsed, total) out of the hopper's last pane line."""
+    line = pane_tail(n)
+    s, p = SRV_RE.search(line), PROG_RE.search(line)
+    return (s.group() if s else None,
+            int(p.group(1)) if p else 0,
+            int(p.group(2)) if p else 0)
+
+
+def _bar(el: int, tot: int, w: int = 10) -> str:
+    f = min(w, int(w * el / tot)) if tot else 0
+    return "█" * f + "░" * (w - f)
+
+
+def device_health() -> str:
+    def sh(c):
+        return subprocess.run(c, shell=True, capture_output=True, text=True, errors="replace").stdout
+    m    = re.search(r"Mem:\s+(\d+)\s+\d+\s+(\d+)", sh("free -m"))          # total, free (MB)
+    load = re.search(r"[\d.]+", sh("cat /proc/loadavg"))                    # 1-min load avg
+    disk = re.search(r"\s(\d+)\s+\d+%\s", sh("df /data 2>/dev/null | tail -1"))  # avail KB
+    ram  = f"{m.group(2)}/{m.group(1)}MB" if m else "?"
+    cpu  = load.group() if load else "?"
+    gb   = f"{int(disk.group(1)) / 1048576:.1f}G" if disk else "?"
+    return f"🧠 {ram} free · ⚙️ load {cpu} · 💾 {gb} free"
+
+
+def render() -> discord.Embed:
+    rows, up = [], 0
+    for n in HOPPERS:
+        if not is_running(n):
+            rows.append(f"{n:>2}  {'—':<5} stopped")
+            continue
+        if "PINNED" in pane_tail(n):
+            up += 1
+            rows.append(f"{n:>2}  📌    held")
+            continue
+        srv, el, tot = _parse(n)
+        up += 1
+        prog = f"{_bar(el, tot)} {el:>3}/{tot}s" if tot else "starting…"
+        rows.append(f"{n:>2}  {srv or '??':<5} {prog}")
+    body = "```\n #  srv   progress\n" + "\n".join(rows) + "\n```"
+    e = discord.Embed(title=f"🐎 {PHONE} · hopper feed", description=body,
+                      color=0x2ecc71 if up else 0x95a5a6)
+    e.set_footer(text=f"{device_health()} · {up}/{len(HOPPERS)} running")
+    e.timestamp = discord.utils.utcnow()
+    return e
+
+
+live_msg = None
+
+
+@tasks.loop(seconds=5)
+async def live_updater():
+    global live_msg
+    if not live_msg:
+        return
+    try:
+        await live_msg.edit(embed=render())
+    except discord.NotFound:
+        live_msg = None      # message was deleted — stop editing a ghost
+    except Exception:
+        pass                 # any render/subprocess/HTTP hiccup: skip this tick, keep the loop alive
+
+
+bot = commands.Bot(command_prefix="!", intents=discord.Intents.none())
+
+
+@bot.event
+async def on_ready():
+    if GUILD_ID:
+        g = discord.Object(id=GUILD_ID)
+        bot.tree.copy_global_to(guild=g)
+        await bot.tree.sync(guild=g)        # register (fast) on your server
+        bot.tree.clear_commands(guild=None)
+        await bot.tree.sync()               # wipe the old GLOBAL copies (kills duplicates)
+    else:
+        await bot.tree.sync()
+    print(f"[{PHONE}] logged in as {bot.user}")
+
+
+@bot.tree.command(description="Start one hopper (1-5)")
+async def start(i: discord.Interaction, n: int):
+    await i.response.send_message(f"[{PHONE}] {start_hopper(n)}")
+
+
+@bot.tree.command(description="Stop one hopper (1-5)")
+async def stop(i: discord.Interaction, n: int):
+    await i.response.send_message(f"[{PHONE}] {stop_hopper(n)}")
+
+
+@bot.tree.command(description="Restart one hopper (1-5)")
+async def restart(i: discord.Interaction, n: int):
+    stop_hopper(n)
+    await i.response.send_message(f"[{PHONE}] {start_hopper(n)}")
+
+
+@bot.tree.command(description="Start all hoppers on this phone")
+async def startall(i: discord.Interaction):
+    await i.response.send_message(f"[{PHONE}]\n" + "\n".join(start_hopper(n) for n in HOPPERS))
+
+
+@bot.tree.command(description="Stop all hoppers + kill the tmux session")
+async def stopall(i: discord.Interaction):
+    tmux("kill-session", "-t", SESSION)
+    await i.response.send_message(f"[{PHONE}] killed session '{SESSION}'")
+
+
+@bot.tree.command(description="One-shot pretty status of all hoppers")
+async def status(i: discord.Interaction):
+    await i.response.send_message(embed=render())
+
+
+@bot.tree.command(description="Device RAM / CPU load / free disk")
+async def health(i: discord.Interaction):
+    await i.response.send_message(f"[{PHONE}] {device_health()}")
+
+
+@bot.tree.command(description="Show each account's Adopt Me inventory (bucks / pets / eggs)")
+async def inv(i: discord.Interaction):
+    files = sorted(INV_DIR.glob("*.json")) if INV_DIR.exists() else []
+    if not files:
+        return await i.response.send_message(f"[{PHONE}] no dumps in `{INV_DIR}` — is the monitor writing there?")
+    rows, tot_b, tot_p = [], 0, 0
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        s = d.get("stats", {})
+        bucks = int(s.get("bucks", d.get("money", 0)) or 0)
+        pets  = int(s.get("petCount", 0) or 0)
+        eggs  = int(s.get("eggCount", 0) or 0)
+        tot_b += bucks; tot_p += pets
+        rows.append(f"{d.get('player', f.stem)[:14]:<14} {bucks:>9,}💰 {pets:>3}🐾 {eggs:>2}🥚")
+    body = "\n".join(rows) or "(empty)"
+    await i.response.send_message(
+        f"[{PHONE}] inventory — {len(rows)} acct · {tot_b:,}💰 · {tot_p}🐾 total\n```\n{body[-1800:]}\n```")
+
+
+@bot.tree.command(description="Live status feed — edits one message every 5s")
+async def live(i: discord.Interaction):
+    global live_msg
+    await i.response.send_message(embed=render())
+    live_msg = await i.original_response()
+    if not live_updater.is_running():
+        live_updater.start()
+
+
+@bot.tree.command(description="Force a hopper to jump to server RF<server> now")
+async def goto(i: discord.Interaction, n: int, server: int):
+    write_cmd(n, f"goto{server}")
+    await i.response.send_message(f"[{PHONE}] hopper{n} → RF{server}")
+
+
+@bot.tree.command(description="Add a PS link to the pool (link.txt)")
+async def link_add(i: discord.Interaction, url: str):
+    with open(POOL_FILE, "a", encoding="utf-8") as f:
+        f.write(url.strip() + "\n")
+    idx = len(pool())
+    await i.response.send_message(f"[{PHONE}] added link #{idx} → `/all_goto {idx}` sends everyone there")
+
+
+@bot.tree.command(description="Send ALL hoppers to a PS link now and hold (temporary, not saved)")
+async def all_goto(i: discord.Interaction, url: str):
+    for n in HOPPERS:
+        write_cmd(n, f"pin {url.strip()}")
+    await i.response.send_message(f"[{PHONE}] all hoppers → that link, holding. `/continue` to resume (link not saved)")
+
+
+@bot.tree.command(name="continue", description="Resume ALL hoppers' normal rotation")
+async def continue_(i: discord.Interaction):
+    for n in HOPPERS:
+        clear_cmd(n)
+    await i.response.send_message(f"[{PHONE}] all hoppers resuming rotation")
+
+
+@bot.tree.command(description="Assign hopper n to link.txt lines <first>-<last>")
+async def assign(i: discord.Interaction, n: int, first: int, last: int):
+    set_range(n, first, last)
+    await i.response.send_message(f"[{PHONE}] hopper{n} = links {first}-{last} ({len(hopper_links(n))} servers)")
+
+
+@bot.tree.command(description="Show every hopper's assignment")
+async def assigns(i: discord.Interaction):
+    d = ranges()
+    body = "\n".join(f"hopper{k}: {d[k][0]}-{d[k][1]}" for k in sorted(d)) or "(none)"
+    await i.response.send_message(f"[{PHONE}] assignments:\n```\n{body}\n```")
+
+
+@bot.tree.command(description="Show a hopper's resolved servers")
+async def servers(i: discord.Interaction, n: int):
+    lst = hopper_links(n)
+    body = "\n".join(f"RF{j}: {l}" for j, l in enumerate(lst, 1)) or "(empty)"
+    await i.response.send_message(f"[{PHONE}] hopper{n}:\n```\n{body[-1850:]}\n```")
+
+
+@bot.tree.command(description="Last N pane lines of a hopper")
+async def logs(i: discord.Interaction, n: int, lines: int = 15):
+    await i.response.send_message(f"[{PHONE}] hopper{n}:\n```\n{pane_tail(n, lines)[-1800:]}\n```")
+
+
+if __name__ == "__main__":
+    if TOKEN == "PASTE_YOUR_BOT_TOKEN_HERE":
+        raise SystemExit("Edit the CONFIG block: paste your bot TOKEN first.")
+    bot.run(TOKEN)

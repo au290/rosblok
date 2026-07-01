@@ -1,0 +1,2 @@
+# Force LF everywhere so shell/lua/python run on Termux (CRLF breaks bash shebangs)
+* text=auto eol=lf

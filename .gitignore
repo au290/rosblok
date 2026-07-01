@@ -1,0 +1,10 @@
+# Track ONLY the runnable code — ignore everything else.
+# hopper*.lua + servers.txt are regenerated on the phone (setup.sh / autoupdate.sh).
+# link.txt, token.txt, cmd/, inv/, logs, archive/, docs stay local to each machine.
+*
+!.gitignore
+!.gitattributes
+!master_bot.py
+!autoupdate.sh
+!setup.sh
+!generate_hoppers.py
