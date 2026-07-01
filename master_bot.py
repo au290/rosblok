@@ -313,6 +313,26 @@ async def inv(i: discord.Interaction):
         f"[{PHONE}] inventory — {len(rows)} acct · {tot_b:,}💰 · {tot_p}🐾 total\n```\n{body[-1800:]}\n```")
 
 
+@bot.tree.command(description="All pets across every account, most-owned first")
+async def pets(i: discord.Interaction):
+    files = sorted(INV_DIR.glob("*.json")) if INV_DIR.exists() else []
+    if not files:
+        return await i.response.send_message(f"[{PHONE}] no dumps in `{INV_DIR}`")
+    totals = {}
+    for f in files:
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
+            totals[pid] = totals.get(pid, 0) + (info.get("count", 0) if isinstance(info, dict) else 0)
+    if not totals:
+        return await i.response.send_message(f"[{PHONE}] no pets found")
+    rows = [f"{c:>4}  {pid}" for pid, c in sorted(totals.items(), key=lambda kv: -kv[1])]
+    await i.response.send_message(
+        f"[{PHONE}] pets — {sum(totals.values())} across {len(files)} acct:\n```\n" + "\n".join(rows)[-1850:] + "\n```")
+
+
 @bot.tree.command(description="List scripts in the Delta autoexec folder")
 async def scripts(i: discord.Interaction):
     fs = [f for f in sorted(AUTOEXEC.glob("*")) if f.is_file()] if AUTOEXEC.exists() else []
