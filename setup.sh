@@ -9,7 +9,8 @@ set -e
 
 echo "[setup] installing packages…"
 pkg update -y >/dev/null 2>&1 || true
-pkg install -y git python tmux lua
+pkg install -y git python tmux lua54          # Termux's Lua package is lua54 (binary: lua5.4)
+command -v lua >/dev/null || ln -sf "$(command -v lua5.4)" "$PREFIX/bin/lua"   # so `lua` works everywhere
 
 echo "[setup] getting the code…"
 cd "$HOME"
@@ -24,9 +25,16 @@ echo "[setup] python deps…"
 pip install -q -U discord.py
 
 if [ ! -f token.txt ]; then
-    printf "[setup] paste your Discord bot token: "
+    printf "[setup] Discord bot token: "
     read -r TOK </dev/tty        # /dev/tty so it works even under curl | bash
     printf '%s\n' "$TOK" > token.txt
+fi
+
+if [ ! -f config.txt ]; then
+    printf "[setup] server (guild) ID: "; read -r GID </dev/tty
+    printf "[setup] phone label [A]: ";    read -r PH  </dev/tty
+    [ -z "$PH" ] && PH=A
+    { echo "GUILD_ID=$GID"; echo "PHONE=$PH"; } > config.txt
 fi
 
 termux-wake-lock 2>/dev/null || true

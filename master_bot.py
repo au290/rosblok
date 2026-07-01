@@ -36,6 +36,17 @@ _tok = BASE_DIR / "token.txt"
 if _tok.exists():
     TOKEN = _tok.read_text().strip()
 
+# config.txt (gitignored, written by setup.sh) overrides CONFIG — survives auto-update's reset --hard
+_cfg = BASE_DIR / "config.txt"
+if _cfg.exists():
+    for _line in _cfg.read_text().splitlines():
+        if "=" in _line and not _line.lstrip().startswith("#"):
+            _k, _v = (s.strip() for s in _line.split("=", 1))
+            if   _k == "GUILD_ID" and _v: GUILD_ID = int(_v)
+            elif _k == "PHONE"    and _v: PHONE = _v
+            elif _k == "LUA"      and _v: LUA = _v
+            elif _k == "HOPPERS"  and _v: HOPPERS = [int(x) for x in _v.split(",") if x.strip()]
+
 
 def tmux(*args):
     return subprocess.run(["tmux", *args], cwd=str(BASE_DIR), capture_output=True, text=True, errors="replace")
