@@ -361,13 +361,21 @@ async def autotrade(i: discord.Interaction, usernames: str, items: str = ""):
     await i.response.send_message(f"[{PHONE}] auto-trade ON → to {users}, {note}")
 
 
-@bot.tree.command(description="util.lua: auto-trade by category (pets,toys,food,transport,gifts,stickers,pet_accessories). Usernames optional.")
-async def autotrade_cat(i: discord.Interaction, categories: str, usernames: str = ""):
+@bot.tree.command(description="util.lua: auto-trade by category — toggle the ones you want. Usernames optional.")
+async def autotrade_cat(i: discord.Interaction,
+                        pets: bool = False, toys: bool = False, food: bool = False,
+                        transport: bool = False, gifts: bool = False, stickers: bool = False,
+                        pet_accessories: bool = False, usernames: str = ""):
+    chosen = [c for c, on in [("pets", pets), ("toys", toys), ("food", food),
+                              ("transport", transport), ("gifts", gifts),
+                              ("stickers", stickers), ("pet_accessories", pet_accessories)] if on]
+    if not chosen:
+        return await i.response.send_message(f"[{PHONE}] pick at least one category")
     f = AUTOEXEC / "util.lua"
     if not f.exists():
         return await i.response.send_message(f"[{PHONE}] util.lua not found in `{AUTOEXEC}`")
     t = f.read_text(errors="replace")
-    cats = _lua_list(categories)
+    cats = _lua_list(",".join(chosen))
     t = re.sub(r'(Enabled\s*=\s*)(?:true|false)(,\s*--\s*Start auto trading on load)',
                lambda m: m.group(1) + "true" + m.group(2), t)
     t = re.sub(r'(Categories\s*=\s*)\{[^}]*\}', lambda m: m.group(1) + cats, t)
