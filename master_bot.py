@@ -93,8 +93,10 @@ def pane_tail(n: int, lines: int = 1) -> str:
     return "\n".join(rows[-lines:]) if rows else "—"
 
 
-MAP_FILE  = BASE_DIR / "servers.txt"
-POOL_FILE = BASE_DIR / "link.txt"
+# link.txt / servers.txt live in the phone's Download folder (change if you keep them elsewhere)
+DATA_DIR  = Path("/storage/emulated/0/Download")
+MAP_FILE  = DATA_DIR / "servers.txt"
+POOL_FILE = DATA_DIR / "link.txt"
 # Folder the in-game monitor writefile()s Adopt Me dumps into.
 # Point this at your executor's workspace, e.g. Path("/storage/emulated/0/Delta/workspace/inv")
 INV_DIR   = BASE_DIR / "inv"
