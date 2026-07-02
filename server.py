@@ -16,6 +16,7 @@ import json
 import uuid
 import shlex
 import asyncio
+import urllib.request
 from pathlib import Path
 
 import discord
@@ -154,6 +155,8 @@ async def on_ready():
     if not getattr(bot, "_http_up", False):
         bot._http_up = True
         await start_http()
+    if not price_refresh.is_running():
+        price_refresh.start()
     print(f"logged in as {bot.user}")
 
 
@@ -256,9 +259,14 @@ def make_dashboard() -> discord.Embed:
                  for pid, v in top]
         e.add_field(name="🔝 Top pets (fleet)", value="```ansi\n" + "\n".join(lines)[:990] + "\n```",
                     inline=False)
+    val, priced, unpriced = _est_value("all")
+    tot = priced + unpriced
+    pct = int(100 * priced / tot) if tot else 0
+    e.add_field(name="💵 Est. value (StarPets floor)",
+                value=f"**≈ ${val:,.2f}**   ·   {pct}% of pets priced", inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
                      f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   **{up}/{len(PHONES)}** phones online")
-    e.set_footer(text="fleet summary · auto-updates every 30s")
+    e.set_footer(text="fleet summary · auto-updates every 30s · prices via StarPets")
     return e
 
 @tasks.loop(seconds=30)
@@ -362,6 +370,87 @@ def _pets_totals(phone: str) -> dict:
             if info.get("rarity"):
                 t["rarity"] = str(info["rarity"])
     return totals
+
+
+# ─────────────────────── StarPets pricing (est. inventory value) ───────────────────────
+_SP_URL     = "https://market.apineural.com/api/v2/store/items/all"
+_SP_HEADERS = {
+    "content-type": "application/json",
+    "origin": "https://starpets.gg", "referer": "https://starpets.gg/",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+}
+PRICES_FILE = BASE_DIR / "prices.json"          # cache: "realName|pumping" -> USD floor
+PRICES = {}
+if PRICES_FILE.exists():
+    try: PRICES = json.loads(PRICES_FILE.read_text())
+    except Exception: PRICES = {}
+
+
+def _key_variant(key: str):
+    """/pets key -> (realName, pumping).  'shadow_dragon (neon)' -> ('shadow_dragon','neon')."""
+    if key.endswith(" (mega neon)"): return key[:-12], "mega_neon"
+    if key.endswith(" (neon)"):      return key[:-7],  "neon"
+    return key, "default"
+
+
+def _sp_floor(real_name: str, pumping: str):
+    """Cheapest StarPets USD listing matching this realName + neon/mega variant (or None)."""
+    body = json.dumps({
+        "filter": {"name": real_name.replace("_", " "),
+                   "types": [{"type": t} for t in ("pet", "egg")]},
+        "page": 1, "amount": 50, "currency": "usd", "sort": {"popularity": "desc"},
+    }).encode()
+    items = []
+    for _ in range(3):                                  # the API 400s intermittently
+        try:
+            req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                items = json.load(r).get("items", [])
+            break
+        except Exception:
+            time.sleep(2)
+    ps = [it["price"] for it in items
+          if it.get("realName") == real_name
+          and (it.get("pumping") or "default") == pumping and it.get("price")]
+    return min(ps) if ps else None
+
+
+def _est_value(phone: str):
+    """(total USD, priced pet count, unpriced pet count) from cached StarPets floors."""
+    total, priced, unpriced = 0.0, 0, 0
+    for key, v in _pets_totals(phone).items():
+        rn, pump = _key_variant(key)
+        p = PRICES.get(f"{rn}|{pump}")
+        if p is None and pump != "default":
+            p = PRICES.get(f"{rn}|default")     # fall back to base variant price
+        if p is None:
+            unpriced += v["count"]
+        else:
+            total += p * v["count"]; priced += v["count"]
+    return total, priced, unpriced
+
+
+@tasks.loop(minutes=30)
+async def price_refresh():
+    """Fetch StarPets floors for any pet kinds we don't have cached yet."""
+    changed = False
+    for key in list(_pets_totals("all").keys()):
+        rn, pump = _key_variant(key)
+        pk = f"{rn}|{pump}"
+        if pk in PRICES:
+            continue
+        price = await asyncio.to_thread(_sp_floor, rn, pump)
+        if price is not None:
+            PRICES[pk] = price; changed = True
+        await asyncio.sleep(1)                  # be gentle on the API
+    if changed:
+        try: PRICES_FILE.write_text(json.dumps(PRICES))
+        except Exception: pass
+
+@price_refresh.before_loop
+async def _price_wait():
+    await bot.wait_until_ready()
 
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
 async def inv(i: discord.Interaction, phone: str = "all"):
