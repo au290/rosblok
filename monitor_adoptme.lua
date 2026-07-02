@@ -52,32 +52,45 @@ do
     end
 end
 
--- get whatever a module knows about a pet kind (table modules: index it; function modules: call it)
-local function infoFor(mod, kind)
-    if type(mod) == "function" then
-        local ok, r = pcall(mod, kind)
-        return ok and r or nil
+-- PetAvatarItemDB is the master DB: pet id -> { name, rarity, ... }. Resolve an entry
+-- via its accessors (get_entry_by_id / items_by_kind / items), not top-level indexing.
+local IDB = raritySrc["PetAvatarItemDB"]
+local entryCache = {}
+local function itemEntry(kind)
+    local c = entryCache[kind]
+    if c ~= nil then return c or nil end
+    local e
+    if type(IDB) == "table" then
+        if type(IDB.get_entry_by_id) == "function" then
+            local ok, r = pcall(IDB.get_entry_by_id, kind); if ok and r ~= nil then e = r end
+            if e == nil then local ok2, r2 = pcall(function() return IDB:get_entry_by_id(kind) end); if ok2 and r2 ~= nil then e = r2 end end
+        end
+        if e == nil and type(IDB.items_by_kind) == "table" then e = IDB.items_by_kind[kind] end
+        if e == nil and type(IDB.items) == "table" then e = IDB.items[kind] end
     end
-    if type(mod) ~= "table" then return nil end
-    if mod[kind] ~= nil then return mod[kind] end
-    for _, sub in ipairs({ "pets", "Pets", "byKind", "kinds", "data" }) do
-        if type(mod[sub]) == "table" and mod[sub][kind] ~= nil then return mod[sub][kind] end
+    entryCache[kind] = e or false
+    return e
+end
+
+local function pickStr(v)                 -- rarity/name may be nested {name=..}/{id=..}
+    if type(v) == "string" then return v end
+    if type(v) == "table" then return v.name or v.id or v.display_name or v.rarity end
+    return nil
+end
+local function rarityOf(kind)
+    local e = itemEntry(kind)
+    if type(e) == "table" then
+        local r = pickStr(e.rarity or e.Rarity or e.rarityName or e.rarity_name or e.pet_rarity)
+        if r then return tostring(r) end
     end
     return nil
 end
-local function entryRarity(e)
-    if type(e) ~= "table" then return nil end
-    return e.rarity or e.Rarity or e.rarityName or e.rarity_name or e.pet_rarity
-end
-local rarityCache = {}
-local function rarityOf(kind)
-    local v = rarityCache[kind]
-    if v ~= nil then return v or nil end
-    for _, mod in pairs(raritySrc) do
-        local r = entryRarity(infoFor(mod, kind))
-        if r then rarityCache[kind] = tostring(r); return tostring(r) end
+local function nameOf(kind)
+    local e = itemEntry(kind)
+    if type(e) == "table" then
+        local nm = pickStr(e.name or e.display_name or e.displayName or e.title)
+        if nm then return tostring(nm) end
     end
-    rarityCache[kind] = false
     return nil
 end
 
@@ -175,6 +188,16 @@ local function getStats()
                             end
                         end
                         sample.rarity_probe = dp
+                        -- the master entry (name + rarity live here) + PetDisplayInfo.get result
+                        sample.itemdb_entry    = dumpval(itemEntry(kind))
+                        sample.itemdb_stripped = dumpval(itemEntry(stripped))
+                        local pdi = raritySrc["PetDisplayInfo"]
+                        if type(pdi) == "table" and type(pdi.get) == "function" then
+                            local ok, r = pcall(pdi.get, kind)
+                            if not (ok and r ~= nil) then ok, r = pcall(function() return pdi:get(kind) end) end
+                            sample.displayinfo = ok and dumpval(r) or ("err: " .. tostring(r))
+                        end
+                        sample.resolved = { name = nameOf(kind), rarity = rarityOf(kind) }
                     end
                     local age  = tonumber(props.age) or 0
                     local neon = props.neon == true
@@ -184,7 +207,8 @@ local function getStats()
                     if mega then key = key .. " (mega neon)" elseif neon then key = key .. " (neon)" end
                     local t = byType[key]
                     if not t then
-                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega, rarity = rarityOf(kind) }
+                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega,
+                              rarity = rarityOf(kind), name = nameOf(kind) }
                         byType[key] = t
                     end
                     t.count = t.count + 1
