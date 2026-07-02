@@ -49,6 +49,15 @@ local function shallow(t)
     return o
 end
 
+local FG_AGE = 5   -- Adopt Me ages 0..5 (Newborn,Junior,Pre-Teen,Teen,Post-Teen,Full Grown)
+
+local function keylist(set)
+    local a = {}
+    for k in pairs(set) do a[#a + 1] = k end
+    table.sort(a)
+    return a
+end
+
 local function getStats()
     local me = getMe()
     if not me then return nil end
@@ -56,38 +65,43 @@ local function getStats()
 
     local petCount, eggCount = 0, 0
     local byType, eggsByType = {}, {}
-    local sample
+    local sample, topKeys, propKeys = nil, {}, {}
     local pets = me.inventory and me.inventory.pets
     if type(pets) == "table" then
         for _, item in pairs(pets) do
             if type(item) == "table" then
                 local props = item.properties or {}
                 local kind  = tostring(item.kind or item.id or "?")   -- kind = pet TYPE (groups correctly)
-                if kind:match("egg$") or item.category == "egg" then
+                for k in pairs(item)  do topKeys[tostring(k)]  = true end   -- collect the field vocabulary
+                for k in pairs(props) do propKeys[tostring(k)] = true end   -- (reveals a neon field if any pet has one)
+                local cat = tostring(item.category or "")
+                if (cat ~= "pets" and cat:lower():match("egg")) or (cat == "" and kind:match("egg$")) then
                     eggCount = eggCount + 1
                     eggsByType[kind] = (eggsByType[kind] or 0) + 1
                 else
                     petCount = petCount + 1
-                    if not sample then
-                        sample = { top = shallow(item), properties = shallow(props) }  -- one raw pet, for calibration
-                    end
+                    if not sample then sample = { top = shallow(item), properties = shallow(props) } end
                     local age  = tonumber(props.age) or 0
-                    local neon = props.neon == true
-                    local mega = props.mega == true
+                    local neon = props.neon == true or props.is_neon == true
+                    local mega = props.mega == true or props.is_mega == true
                     -- fold neon/mega into the key so /pets shows them grouped separately
                     local key = kind
                     if neon then key = key .. " (neon)" end
                     if mega then key = key .. " (mega)" end
                     local t = byType[key]
                     if not t then
-                        t = { count = 0, max_age = 0, kind = kind, neon = neon, mega = mega }
+                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega }
                         byType[key] = t
                     end
                     t.count = t.count + 1
-                    if age > t.max_age then t.max_age = age end
+                    if age >= FG_AGE then t.fg = t.fg + 1 end   -- full grown
                 end
             end
         end
+    end
+    if sample then
+        sample.top_keys  = keylist(topKeys)    -- so we can spot neon/rarity fields next dump
+        sample.prop_keys = keylist(propKeys)
     end
     return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType, sample = sample }
 end

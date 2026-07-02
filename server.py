@@ -71,25 +71,23 @@ def enqueue(phone: str, cmd: str):
 
 async def run_on(phones: list, cmd: str, timeout: int = 15) -> str:
     """Enqueue cmd on each phone, wait for each result, join them."""
-    pending = {}   # phone -> (job_id, future) or None if offline
+    pending = {}
     for p in phones:
         if p not in PHONES:
             continue
         if not online(p):
             pending[p] = None            # skip enqueue; report offline
         else:
-            fut = enqueue(p, cmd)
-            pending[p] = (jobs[p][-1]["id"], fut)
+            pending[p] = enqueue(p, cmd)
     out = []
-    for p, item in pending.items():
-        if item is None:
+    for p, fut in pending.items():
+        if fut is None:
             out.append(f"[{p}] offline")
             continue
-        jid, fut = item
         try:
             out.append(f"[{p}] " + (await asyncio.wait_for(fut, timeout)))
         except asyncio.TimeoutError:
-            futures.pop(jid, None)       # drop the orphaned future
+            futures.pop_id = getattr(futures, "pop", None)
             out.append(f"[{p}] no response")
     return "\n".join(out) or "(no phones)"
 
@@ -274,20 +272,28 @@ async def inv(i: discord.Interaction, phone: str = "A"):
     await i.response.send_message(
         f"[{phone}] inventory — {len(rows)} acct · {tb:,}💰 · {tp}🐾 total\n```\n{body[-1800:]}\n```")
 
-@bot.tree.command(description="All pets across every account, most-owned first")
+@bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
 async def pets(i: discord.Interaction, phone: str = "A"):
     data = reports.get(phone, {}).get("inv") or {}
     if not data:
         return await i.response.send_message(f"[{phone}] no inv reported")
-    totals = {}
+    totals = {}   # kind(+neon/mega) -> {count, fg}
     for d in data.values():
         for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
-            totals[pid] = totals.get(pid, 0) + (info.get("count", 0) if isinstance(info, dict) else 0)
+            if not isinstance(info, dict):
+                continue
+            t = totals.setdefault(pid, {"count": 0, "fg": 0})
+            t["count"] += info.get("count", 0)
+            t["fg"]    += info.get("fg", 0)
     if not totals:
         return await i.response.send_message(f"[{phone}] no pets found")
-    rows = [f"{c:>4}  {pid}" for pid, c in sorted(totals.items(), key=lambda kv: -kv[1])]
+    tot   = sum(v["count"] for v in totals.values())
+    totfg = sum(v["fg"] for v in totals.values())
+    rows  = [f"{v['count']:>4} {v['fg']:>4}FG  {pid}"
+             for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])]
+    body  = "cnt   fg  pet\n" + "\n".join(rows)
     await i.response.send_message(
-        f"[{phone}] pets — {sum(totals.values())} across {len(data)} acct:\n```\n" + "\n".join(rows)[-1850:] + "\n```")
+        f"[{phone}] pets — {tot} pets ({totfg} full-grown) across {len(data)} acct:\n```\n{body[-1830:]}\n```")
 
 
 # ── autoexec scripts ──
