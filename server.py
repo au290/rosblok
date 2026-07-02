@@ -167,101 +167,111 @@ async def job_reply(i: discord.Interaction, phone: str, cmd: str, code: bool = F
 
 # ── lifecycle ──
 @bot.tree.command(description="Start one hopper (phone A/B/all)")
-async def start(i: discord.Interaction, n: int, phone: str = "A"):
+async def start(i: discord.Interaction, n: int, phone: str = "all"):
     await job_reply(i, phone, f"start {n}")
 
 @bot.tree.command(description="Stop one hopper")
-async def stop(i: discord.Interaction, n: int, phone: str = "A"):
+async def stop(i: discord.Interaction, n: int, phone: str = "all"):
     await job_reply(i, phone, f"stop {n}")
 
 @bot.tree.command(description="Restart one hopper")
-async def restart(i: discord.Interaction, n: int, phone: str = "A"):
+async def restart(i: discord.Interaction, n: int, phone: str = "all"):
     await job_reply(i, phone, f"restart {n}")
 
 @bot.tree.command(description="Start all hoppers on a phone")
-async def startall(i: discord.Interaction, phone: str = "A"):
+async def startall(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "startall")
 
 @bot.tree.command(description="Stop all hoppers + kill the tmux session")
-async def stopall(i: discord.Interaction, phone: str = "A"):
+async def stopall(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "stopall")
 
 
 # ── status (read the phone's last report — instant) ──
-@bot.tree.command(description="One-shot status board for a phone")
-async def status(i: discord.Interaction, phone: str = "A"):
-    await i.response.send_message(embed=make_embed(phone))
+@bot.tree.command(description="One-shot status board (phone A/B/all)")
+async def status(i: discord.Interaction, phone: str = "all"):
+    await i.response.send_message(embeds=[make_embed(p) for p in targets(phone)][:10])
 
 @bot.tree.command(description="Device RAM / load / disk (last reported)")
-async def health(i: discord.Interaction, phone: str = "A"):
-    await i.response.send_message(f"[{phone}] {reports.get(phone, {}).get('footer') or 'no report yet'}")
+async def health(i: discord.Interaction, phone: str = "all"):
+    lines = [f"[{p}] {reports.get(p, {}).get('footer') or 'no report yet'}" for p in targets(phone)]
+    await i.response.send_message("\n".join(lines))
 
 @bot.tree.command(description="Last N pane lines of a hopper")
-async def logs(i: discord.Interaction, n: int, phone: str = "A", lines: int = 15):
+async def logs(i: discord.Interaction, n: int, phone: str = "all", lines: int = 15):
     await job_reply(i, phone, f"logs {n} {lines}", code=True)
 
 
 # ── live feed (edits one message every 5s from cached reports) ──
-live_msgs = {}   # phone -> Message
+live_entries = []   # list of (Message, [phones]) — one embed per phone
 
 @tasks.loop(seconds=5)
 async def live_loop():
-    for phone, msg in list(live_msgs.items()):
+    for entry in list(live_entries):
+        msg, phones = entry
         try:
-            await msg.edit(embed=make_embed(phone))
+            await msg.edit(embeds=[make_embed(p) for p in phones][:10])
         except discord.NotFound:
-            live_msgs.pop(phone, None)
+            live_entries.remove(entry)
         except Exception:
             pass
 
-@bot.tree.command(description="Live status feed for a phone (updates every 5s)")
-async def live(i: discord.Interaction, phone: str = "A"):
-    await i.response.send_message(embed=make_embed(phone))
-    live_msgs[phone] = await i.original_response()
+@bot.tree.command(description="Live status feed (phone A/B/all), updates every 5s")
+async def live(i: discord.Interaction, phone: str = "all"):
+    phones = targets(phone)
+    await i.response.send_message(embeds=[make_embed(p) for p in phones][:10])
+    live_entries.append((await i.original_response(), phones))
     if not live_loop.is_running():
         live_loop.start()
 
 
 # ── servers / assignment ──
 @bot.tree.command(description="Force a hopper to jump to RF<server> now")
-async def goto(i: discord.Interaction, n: int, server: int, phone: str = "A"):
+async def goto(i: discord.Interaction, n: int, server: int, phone: str = "all"):
     await job_reply(i, phone, f"goto {n} {server}")
 
 @bot.tree.command(description="Assign hopper n to link.txt lines <first>-<last>")
-async def assign(i: discord.Interaction, n: int, first: int, last: int, phone: str = "A"):
+async def assign(i: discord.Interaction, n: int, first: int, last: int, phone: str = "all"):
     await job_reply(i, phone, f"assign {n} {first} {last}")
 
 @bot.tree.command(description="Show every hopper's assignment")
-async def assigns(i: discord.Interaction, phone: str = "A"):
+async def assigns(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "assigns", code=True)
 
 @bot.tree.command(description="Show a hopper's resolved servers")
-async def servers(i: discord.Interaction, n: int, phone: str = "A"):
+async def servers(i: discord.Interaction, n: int, phone: str = "all"):
     await job_reply(i, phone, f"servers {n}", code=True)
 
 
 # ── pool + pin ──
 @bot.tree.command(description="Add a PS link to the pool (link.txt)")
-async def link_add(i: discord.Interaction, url: str, phone: str = "A"):
+async def link_add(i: discord.Interaction, url: str, phone: str = "all"):
     await job_reply(i, phone, f"link_add {shlex.quote(url)}")
 
 @bot.tree.command(description="Send ALL hoppers to a PS link now and hold")
-async def all_goto(i: discord.Interaction, url: str, phone: str = "A"):
+async def all_goto(i: discord.Interaction, url: str, phone: str = "all"):
     await job_reply(i, phone, f"all_goto {shlex.quote(url)}")
 
 @bot.tree.command(name="continue", description="Resume ALL hoppers' rotation")
-async def continue_(i: discord.Interaction, phone: str = "A"):
+async def continue_(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "continue")
 
 
 # ── inventory (computed from the phone's reported inv blob) ──
+def _inv_of(phone: str) -> list:
+    """All reported account blobs across the target phone(s)."""
+    out = []
+    for p in targets(phone):
+        out.extend((reports.get(p, {}).get("inv") or {}).values())
+    return out
+
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
-async def inv(i: discord.Interaction, phone: str = "A"):
-    data = reports.get(phone, {}).get("inv") or {}
+async def inv(i: discord.Interaction, phone: str = "all"):
+    data = _inv_of(phone)
     if not data:
         return await i.response.send_message(f"[{phone}] no inv reported (monitor writing? phone online?)")
     rows, tb, tp = [], 0, 0
-    for d in data.values():
+    for d in data:
         s = d.get("stats", {})
         bucks = int(s.get("bucks", d.get("money", 0)) or 0)
         pets  = int(s.get("petCount", 0) or 0)
@@ -273,12 +283,12 @@ async def inv(i: discord.Interaction, phone: str = "A"):
         f"[{phone}] inventory — {len(rows)} acct · {tb:,}💰 · {tp}🐾 total\n```\n{body[-1800:]}\n```")
 
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
-async def pets(i: discord.Interaction, phone: str = "A"):
-    data = reports.get(phone, {}).get("inv") or {}
+async def pets(i: discord.Interaction, phone: str = "all"):
+    data = _inv_of(phone)
     if not data:
         return await i.response.send_message(f"[{phone}] no inv reported")
     totals = {}   # kind(+neon/mega) -> {count, fg, rarity}
-    for d in data.values():
+    for d in data:
         for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
             if not isinstance(info, dict):
                 continue
@@ -300,25 +310,25 @@ async def pets(i: discord.Interaction, phone: str = "A"):
 
 # ── autoexec scripts ──
 @bot.tree.command(description="List scripts in the Delta autoexec folder")
-async def scripts(i: discord.Interaction, phone: str = "A"):
+async def scripts(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "scripts", code=True)
 
 @bot.tree.command(description="Show an autoexec script's contents")
-async def script_get(i: discord.Interaction, name: str, phone: str = "A"):
+async def script_get(i: discord.Interaction, name: str, phone: str = "all"):
     await job_reply(i, phone, f"script_get {shlex.quote(name)}", code=True)
 
 @bot.tree.command(description="Download a script from a URL into autoexec")
-async def script_add(i: discord.Interaction, name: str, url: str, phone: str = "A"):
+async def script_add(i: discord.Interaction, name: str, url: str, phone: str = "all"):
     await job_reply(i, phone, f"script_add {shlex.quote(name)} {shlex.quote(url)}")
 
 @bot.tree.command(description="Delete a script from the autoexec folder")
-async def script_del(i: discord.Interaction, name: str, phone: str = "A"):
+async def script_del(i: discord.Interaction, name: str, phone: str = "all"):
     await job_reply(i, phone, f"script_del {shlex.quote(name)}")
 
 
 # ── auto-trade ──
 @bot.tree.command(description="util.lua auto-trade: toggle categories OR pass item IDs")
-async def autotrade(i: discord.Interaction, phone: str = "A",
+async def autotrade(i: discord.Interaction, phone: str = "all",
                     pets: bool = False, toys: bool = False, food: bool = False,
                     transport: bool = False, gifts: bool = False, stickers: bool = False,
                     pet_accessories: bool = False, items: str = "", usernames: str = ""):
