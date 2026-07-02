@@ -11,6 +11,9 @@ RAW="https://raw.githubusercontent.com/au290/rosblok/main"
 cd "$DIR" || exit 1
 termux-wake-lock 2>/dev/null
 
+# download via python (always present) so a broken curl can't stop updates
+dl() { python -c "import sys,urllib.request; open(sys.argv[2],'wb').write(urllib.request.urlopen(sys.argv[1]).read())" "$1" "$2"; }
+
 # entry file: agent.py (VPS mode) wins if present, else master_bot.py (single-phone)
 ENTRY="master_bot.py"; [ -f agent.py ] && ENTRY="agent.py"
 
@@ -23,7 +26,7 @@ restart_bot() {
 
 restart_bot                                    # launch once at start
 while true; do
-    if curl -fsSL "$RAW/$ENTRY" -o ".$ENTRY.new" 2>/dev/null && [ -s ".$ENTRY.new" ]; then
+    if dl "$RAW/$ENTRY" ".$ENTRY.new" 2>/dev/null && [ -s ".$ENTRY.new" ]; then
         # md5sum < file → hash only (no filename), so first run (no local file) also updates
         if [ "$(md5sum < "$ENTRY" 2>/dev/null)" != "$(md5sum < ".$ENTRY.new")" ]; then
             mv ".$ENTRY.new" "$ENTRY"
