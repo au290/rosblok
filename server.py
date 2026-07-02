@@ -229,8 +229,8 @@ async def live(i: discord.Interaction, phone: str = "all"):
 dash_msgs = []   # list of Message
 
 def make_dashboard() -> discord.Embed:
-    e = discord.Embed(title="📊 Fleet Dashboard", color=0x5865F2, timestamp=discord.utils.utcnow())
     g, up = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}, 0
+    fields = []
     for p in PHONES:
         on = online(p)
         if on:
@@ -239,10 +239,16 @@ def make_dashboard() -> discord.Embed:
         for k in g:
             g[k] += su[k]
         foot = reports.get(p, {}).get("footer") or "no report yet"
-        e.add_field(
-            name=f"{'🟢' if on else '⚪'} Phone {p}",
-            value=f"{foot}\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚",
-            inline=False)
+        fields.append((f"{'🟢' if on else '🔴'} Phone {p}",
+                       f"{foot}\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
+    # colour reflects fleet health: all online = green, some offline = orange, all down = red
+    if   up == len(PHONES): color = 0x2ECC71
+    elif up == 0:           color = 0xE74C3C
+    else:                   color = 0xE67E22
+    dot = "🟢" if up == len(PHONES) else ("🔴" if up == 0 else "🟠")
+    e = discord.Embed(title=f"{dot} Fleet Dashboard", color=color, timestamp=discord.utils.utcnow())
+    for name, value in fields:
+        e.add_field(name=name, value=value, inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
                      f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   **{up}/{len(PHONES)}** phones online")
     e.set_footer(text="fleet summary · auto-updates every 30s")
