@@ -6,6 +6,7 @@
 # Every 60s it re-downloads server.py; if it changed, overwrites + restarts the bot.
 # Bot stdout/stderr go to bot.log / bot.err.log.  Ctrl-C to stop the updater.
 
+$ProgressPreference = "SilentlyContinue"   # hide Invoke-WebRequest's progress bar (also much faster)
 Set-Location -Path $PSScriptRoot
 $Raw   = "https://raw.githubusercontent.com/au290/rosblok/main"
 $Entry = "server.py"

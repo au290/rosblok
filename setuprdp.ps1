@@ -8,6 +8,7 @@
 # Re-runnable: current values are offered as defaults - press Enter to keep them.
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"   # hide Invoke-WebRequest progress bar (faster too)
 Set-Location -Path $PSScriptRoot
 $Raw = "https://raw.githubusercontent.com/au290/rosblok/main"
 
