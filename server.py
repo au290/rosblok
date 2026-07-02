@@ -52,7 +52,7 @@ if _cfg.exists():
 # ─────────────────────────── per-phone state ───────────────────────────
 jobs    = {p: [] for p in PHONES}                                    # pending jobs per phone
 futures = {}                                                         # job_id -> Future (awaiting result)
-reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "ts": 0.0} for p in PHONES}
+reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "srv_now": [], "ts": 0.0} for p in PHONES}
 
 
 def targets(phone: str) -> list:
@@ -111,6 +111,8 @@ async def handle_poll(req: web.Request):
         rep["inv"] = body.get("inv", rep["inv"])
     if "servers" in body:
         rep["servers"] = body.get("servers", rep.get("servers", 0))
+    if "srv_now" in body:
+        rep["srv_now"] = body.get("srv_now", rep.get("srv_now", []))
     rep["ts"] = time.time()
     for r in body.get("results", []):
         fut = futures.pop(r.get("id"), None)
@@ -245,10 +247,11 @@ def make_dashboard() -> discord.Embed:
         for k in g:
             g[k] += su[k]
         foot = reports.get(p, {}).get("footer") or "no report yet"
-        srv = reports.get(p, {}).get("servers", 0)
-        g_srv += srv
+        g_srv += reports.get(p, {}).get("servers", 0)
+        now = reports.get(p, {}).get("srv_now") or []
+        now_line = ("📍 " + " ".join(f"`{x}`" for x in now)) if now else ""
         fields.append((f"{'🟢' if on else '🔴'} Phone {p}",
-                       f"{foot} · 🌐 `{srv}` srv\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
+                       f"{foot}\n{now_line}\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
     # colour reflects fleet health: all online = green, some offline = orange, all down = red
     if   up == len(PHONES): color = 0x2ECC71
     elif up == 0:           color = 0xE74C3C
@@ -285,10 +288,12 @@ async def dash_loop():
         except Exception:
             pass
 
-@bot.tree.command(description="Auto-updating fleet dashboard: bucks/pets/hoppers/health (every 30s)")
+@bot.tree.command(description="Auto-updating fleet dashboard: bucks/pets/servers/value (every 30s)")
 async def dashboard(i: discord.Interaction):
-    await i.response.send_message(embed=make_dashboard())
-    dash_msgs.append(await i.original_response())
+    await i.response.defer()
+    await refresh_prices_once()                 # pull any missing StarPets prices now
+    msg = await i.followup.send(embed=make_dashboard())
+    dash_msgs.append(msg)
     if not dash_loop.is_running():
         dash_loop.start()
 
@@ -467,6 +472,33 @@ async def price_refresh():
 @price_refresh.before_loop
 async def _price_wait():
     await bot.wait_until_ready()
+
+
+async def refresh_prices_once(limit: int = 80):
+    """Fetch StarPets floors for all currently-uncached pet kinds, concurrently."""
+    todo = []
+    for key in _pets_totals("all"):
+        rn, pump = _key_variant(key)
+        pk = f"{rn}|{pump}"
+        if pk not in PRICES:
+            todo.append((pk, rn, pump))
+    if not todo:
+        return 0
+    sem = asyncio.Semaphore(8)
+    async def one(pk, rn, pump):
+        async with sem:
+            try:
+                p = await asyncio.to_thread(_sp_floor, rn, pump)
+            except Exception:
+                p = None
+            if p is not None:
+                PRICES[pk] = p
+    await asyncio.gather(*(one(*t) for t in todo[:limit]))
+    try:
+        PRICES_FILE.write_text(json.dumps(PRICES))
+    except Exception:
+        pass
+    return len(todo)
 
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
 async def inv(i: discord.Interaction, phone: str = "all"):

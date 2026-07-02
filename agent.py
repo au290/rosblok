@@ -233,22 +233,24 @@ def device_health() -> str:
 
 
 def build_board():
-    rows, up = [], 0
+    rows, up, now = [], 0, []
     for n in HOPPERS:
         if not is_running(n):
             rows.append(f"{n:>2}  {'—':<5} stopped")
             continue
         if "PINNED" in pane_tail(n):
             up += 1
+            now.append(f"{n}:PIN")
             rows.append(f"{n:>2}  📌    held")
             continue
         srv, el, tot = _parse(n)
         up += 1
+        now.append(f"{n}:{srv or '?'}")               # this hopper's current server
         prog = f"{_bar(el, tot)} {el:>3}/{tot}s" if tot else "starting…"
         rows.append(f"{n:>2}  {srv or '??':<5} {prog}")
     board  = "```\n #  srv   progress\n" + "\n".join(rows) + "\n```"
     footer = f"{device_health()} · {up}/{len(HOPPERS)} running"
-    return board, footer
+    return board, footer, now
 
 
 def read_inv() -> dict:
@@ -320,10 +322,10 @@ def safe(cmd: str) -> str:
 
 # ─────────────────────────── poll loop ───────────────────────────
 def poll(results: list) -> list:
-    board, footer = build_board()
+    board, footer, now = build_board()
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
-                       "servers": servers, "results": results}).encode()
+                       "servers": servers, "srv_now": now, "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
                                           "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)
