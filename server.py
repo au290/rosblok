@@ -225,6 +225,47 @@ async def live(i: discord.Interaction, phone: str = "all"):
         live_loop.start()
 
 
+# ── dashboard (whole-fleet exec summary, auto-updates every 30s) ──
+dash_msgs = []   # list of Message
+
+def make_dashboard() -> discord.Embed:
+    e = discord.Embed(title="📊 Fleet Dashboard", color=0x5865F2, timestamp=discord.utils.utcnow())
+    g, up = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}, 0
+    for p in PHONES:
+        on = online(p)
+        if on:
+            up += 1
+        su = _inv_summary(p)
+        for k in g:
+            g[k] += su[k]
+        foot = reports.get(p, {}).get("footer") or "no report yet"
+        e.add_field(
+            name=f"{'🟢' if on else '⚪'} Phone {p}",
+            value=f"{foot}\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚",
+            inline=False)
+    e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
+                     f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   **{up}/{len(PHONES)}** phones online")
+    e.set_footer(text="fleet summary · auto-updates every 30s")
+    return e
+
+@tasks.loop(seconds=30)
+async def dash_loop():
+    for m in list(dash_msgs):
+        try:
+            await m.edit(embed=make_dashboard())
+        except discord.NotFound:
+            dash_msgs.remove(m)
+        except Exception:
+            pass
+
+@bot.tree.command(description="Auto-updating fleet dashboard: bucks/pets/hoppers/health (every 30s)")
+async def dashboard(i: discord.Interaction):
+    await i.response.send_message(embed=make_dashboard())
+    dash_msgs.append(await i.original_response())
+    if not dash_loop.is_running():
+        dash_loop.start()
+
+
 # ── servers / assignment ──
 @bot.tree.command(description="Force a hopper to jump to RF<server> now")
 async def goto(i: discord.Interaction, n: int, server: int, phone: str = "all"):
@@ -267,22 +308,40 @@ def _inv_of(phone: str) -> list:
                 out.append(b)
     return out
 
+
+def _inv_summary(phone: str) -> dict:
+    """Totals across the target phone(s): accounts, bucks, pets, full-grown, eggs."""
+    su = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}
+    for d in _inv_of(phone):
+        s = d.get("stats", {})
+        su["accts"] += 1
+        su["bucks"] += int(s.get("bucks", d.get("money", 0)) or 0)
+        su["pets"]  += int(s.get("petCount", 0) or 0)
+        su["eggs"]  += int(s.get("eggCount", 0) or 0)
+        for info in ((d.get("pets") or {}).get("by_type") or {}).values():
+            if isinstance(info, dict):
+                su["fg"] += info.get("fg", 0)
+    return su
+
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
 async def inv(i: discord.Interaction, phone: str = "all"):
     data = _inv_of(phone)
     if not data:
-        return await i.response.send_message(f"[{phone}] no inv reported (monitor writing? phone online?)")
-    rows, tb, tp = [], 0, 0
-    for d in data:
+        return await i.response.send_message(f"⚠️ [{phone}] no inventory reported — is the monitor running and the phone online?")
+    rows = []
+    for d in sorted(data, key=lambda d: -int((d.get("stats", {})).get("bucks", d.get("money", 0)) or 0)):
         s = d.get("stats", {})
         bucks = int(s.get("bucks", d.get("money", 0)) or 0)
         pets  = int(s.get("petCount", 0) or 0)
         eggs  = int(s.get("eggCount", 0) or 0)
-        tb += bucks; tp += pets
-        rows.append(f"{d.get('player', '?')[:14]:<14} {bucks:>9,}💰 {pets:>3}🐾 {eggs:>2}🥚")
-    body = "\n".join(rows) or "(empty)"
-    await i.response.send_message(
-        f"[{phone}] inventory — {len(rows)} acct · {tb:,}💰 · {tp}🐾 total\n```\n{body[-1800:]}\n```")
+        rows.append(f"{d.get('player', '?')[:14]:<14} {bucks:>8,} {pets:>4} {eggs:>4}")
+    su = _inv_summary(phone)
+    e = discord.Embed(title=f"💰 Inventory · {phone}", color=0xF1C40F, timestamp=discord.utils.utcnow())
+    e.description = "```\naccount           bucks pets eggs\n" + ("\n".join(rows))[-3800:] + "\n```"
+    e.add_field(name="👤 Accounts", value=f"{su['accts']}", inline=True)
+    e.add_field(name="💰 Bucks",    value=f"{su['bucks']:,}", inline=True)
+    e.add_field(name="🐾 Pets",     value=f"{su['pets']}  ·  {su['fg']} FG  ·  {su['eggs']}🥚", inline=True)
+    await i.response.send_message(embed=e)
 
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
 async def pets(i: discord.Interaction, phone: str = "all"):
@@ -305,9 +364,12 @@ async def pets(i: discord.Interaction, phone: str = "all"):
     totfg = sum(v["fg"] for v in totals.values())
     rows  = [f"{v['count']:>4} {v['fg']:>4}FG  {(v['rarity'] or '?')[:9]:<9} {pid}"
              for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])]
-    body  = "cnt   fg  rarity    pet\n" + "\n".join(rows)
-    await i.response.send_message(
-        f"[{phone}] pets — {tot} pets ({totfg} full-grown) across {len(data)} acct:\n```\n{body[-1830:]}\n```")
+    e = discord.Embed(title=f"🐾 Pets · {phone}", color=0x2ECC71, timestamp=discord.utils.utcnow())
+    e.description = "```\ncnt   fg  rarity    pet\n" + ("\n".join(rows))[-3800:] + "\n```"
+    e.add_field(name="🐾 Total",      value=f"{tot}", inline=True)
+    e.add_field(name="🌟 Full grown", value=f"{totfg}", inline=True)
+    e.add_field(name="🔖 Types",      value=f"{len(totals)}", inline=True)
+    await i.response.send_message(embed=e)
 
 
 # ── autoexec scripts ──
