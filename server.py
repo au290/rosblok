@@ -277,21 +277,23 @@ async def pets(i: discord.Interaction, phone: str = "A"):
     data = reports.get(phone, {}).get("inv") or {}
     if not data:
         return await i.response.send_message(f"[{phone}] no inv reported")
-    totals = {}   # kind(+neon/mega) -> {count, fg}
+    totals = {}   # kind(+neon/mega) -> {count, fg, rarity}
     for d in data.values():
         for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
             if not isinstance(info, dict):
                 continue
-            t = totals.setdefault(pid, {"count": 0, "fg": 0})
+            t = totals.setdefault(pid, {"count": 0, "fg": 0, "rarity": ""})
             t["count"] += info.get("count", 0)
             t["fg"]    += info.get("fg", 0)
+            if info.get("rarity"):
+                t["rarity"] = str(info["rarity"])
     if not totals:
         return await i.response.send_message(f"[{phone}] no pets found")
     tot   = sum(v["count"] for v in totals.values())
     totfg = sum(v["fg"] for v in totals.values())
-    rows  = [f"{v['count']:>4} {v['fg']:>4}FG  {pid}"
+    rows  = [f"{v['count']:>4} {v['fg']:>4}FG  {(v['rarity'] or '?')[:9]:<9} {pid}"
              for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])]
-    body  = "cnt   fg  pet\n" + "\n".join(rows)
+    body  = "cnt   fg  rarity    pet\n" + "\n".join(rows)
     await i.response.send_message(
         f"[{phone}] pets — {tot} pets ({totfg} full-grown) across {len(data)} acct:\n```\n{body[-1830:]}\n```")
 

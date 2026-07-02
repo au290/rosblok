@@ -30,6 +30,51 @@ if not ClientData or type(ClientData.get_data) ~= "function" then
     return
 end
 
+-- ── Pet rarity source (module name varies by build; discover once, cache) ──
+local raritySrc = {}   -- name -> module table that may map pet kind -> rarity
+do
+    local Fsys
+    pcall(function() Fsys = require(RS.Fsys) end)
+    if Fsys and Fsys.load then
+        for _, n in ipairs({ "PetConstants", "Pets", "PetData", "PetInfo",
+                             "PetTextInfo", "PetRegistry", "PetProducts" }) do
+            local ok, mod = pcall(function() return Fsys.load(n) end)
+            if ok and type(mod) == "table" then raritySrc[n] = mod end
+        end
+    end
+    -- also scan the tree for pet-ish ModuleScripts (covers builds with other names)
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("ModuleScript") and d.Name:lower():match("pet") and not raritySrc[d.Name] then
+            local ok, mod = pcall(require, d)
+            if ok and type(mod) == "table" then raritySrc[d.Name] = mod end
+        end
+    end
+end
+
+local function lookupEntry(mod, kind)
+    if type(mod) ~= "table" then return nil end
+    if mod[kind] ~= nil then return mod[kind] end
+    for _, sub in ipairs({ "pets", "Pets", "byKind", "kinds", "data" }) do
+        if type(mod[sub]) == "table" and mod[sub][kind] ~= nil then return mod[sub][kind] end
+    end
+    return nil
+end
+local function entryRarity(e)
+    if type(e) ~= "table" then return nil end
+    return e.rarity or e.Rarity or e.rarityName or e.rarity_name
+end
+local rarityCache = {}
+local function rarityOf(kind)
+    local v = rarityCache[kind]
+    if v ~= nil then return v or nil end
+    for _, mod in pairs(raritySrc) do
+        local r = entryRarity(lookupEntry(mod, kind))
+        if r then rarityCache[kind] = tostring(r); return tostring(r) end
+    end
+    rarityCache[kind] = false
+    return nil
+end
+
 -- ── Read stats ─────────────────────────────────────────────────────
 local function getMe()
     local ok, all = pcall(function() return ClientData.get_data() end)
@@ -80,7 +125,12 @@ local function getStats()
                     eggsByType[kind] = (eggsByType[kind] or 0) + 1
                 else
                     petCount = petCount + 1
-                    if not sample then sample = { top = shallow(item), properties = shallow(props) } end
+                    if not sample then
+                        sample = { top = shallow(item), properties = shallow(props) }
+                        local probe = {}   -- where does rarity live for this kind?
+                        for n, mod in pairs(raritySrc) do probe[n] = shallow(lookupEntry(mod, kind)) end
+                        sample.rarity_probe = probe
+                    end
                     local age  = tonumber(props.age) or 0
                     local neon = props.neon == true or props.is_neon == true
                     local mega = props.mega == true or props.is_mega == true
@@ -90,7 +140,7 @@ local function getStats()
                     if mega then key = key .. " (mega)" end
                     local t = byType[key]
                     if not t then
-                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega }
+                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega, rarity = rarityOf(kind) }
                         byType[key] = t
                     end
                     t.count = t.count + 1
@@ -100,8 +150,9 @@ local function getStats()
         end
     end
     if sample then
-        sample.top_keys  = keylist(topKeys)    -- so we can spot neon/rarity fields next dump
-        sample.prop_keys = keylist(propKeys)
+        sample.top_keys        = keylist(topKeys)     -- so we can spot neon/rarity fields next dump
+        sample.prop_keys       = keylist(propKeys)
+        sample.rarity_modules  = keylist(raritySrc)   -- which pet modules we actually found
     end
     return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType, sample = sample }
 end
