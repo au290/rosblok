@@ -15,6 +15,7 @@ import re
 import json
 import time
 import shlex
+import threading
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -264,6 +265,84 @@ def read_inv() -> dict:
     return out
 
 
+# ─────────────── StarPets pricing (fetched here — phones reach the API cleanly) ───────────────
+# The VPS host does TLS interception, so pricing lives on the phone. We fetch floor prices for
+# this phone's pets in a background thread and include them in each poll for the VPS to merge.
+_SP_URL = "https://market.apineural.com/api/v2/store/items/all"
+_SP_HEADERS = {
+    "content-type": "application/json",
+    "origin": "https://starpets.gg", "referer": "https://starpets.gg/",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+}
+PRICES_FILE = RUN_DIR / "prices.json"
+PRICES = {}
+if PRICES_FILE.exists():
+    try:
+        PRICES = json.loads(PRICES_FILE.read_text())
+    except Exception:
+        PRICES = {}
+
+
+def _key_variant(key: str):
+    if key.endswith(" (mega neon)"): return key[:-12], "mega_neon"
+    if key.endswith(" (neon)"):      return key[:-7],  "neon"
+    return key, "default"
+
+
+def _sp_floor(real_name: str, pumping: str):
+    """Cheapest StarPets USD listing for this pet + variant. Adopt Me prefixes event/egg
+    pets; StarPets realName is sometimes the full kind, sometimes the bare name — search by
+    the year-stripped name and match realName against both."""
+    stripped = re.sub(r"^.*?\d{4}_", "", real_name)
+    names = {real_name, stripped}
+    body = json.dumps({"filter": {"name": stripped.replace("_", " "),
+                                  "types": [{"type": t} for t in ("pet", "egg")]},
+                       "page": 1, "amount": 50, "currency": "usd",
+                       "sort": {"popularity": "desc"}}).encode()
+    items = []
+    for _ in range(3):                                  # the API 400s intermittently
+        try:
+            req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
+            with urllib.request.urlopen(req, timeout=30) as r:
+                items = json.load(r).get("items", [])
+            break
+        except Exception:
+            time.sleep(2)
+    ps = [it["price"] for it in items
+          if it.get("realName") in names
+          and (it.get("pumping") or "default") == pumping and it.get("price")]
+    return min(ps) if ps else None
+
+
+def price_worker():
+    """Background loop: fetch + cache StarPets floors for this phone's pets."""
+    while True:
+        try:
+            keys = set()
+            for d in read_inv().values():
+                if isinstance(d, dict):
+                    keys.update((d.get("pets") or {}).get("by_type") or {})
+            changed = False
+            for key in keys:
+                rn, pump = _key_variant(key)
+                pk = f"{rn}|{pump}"
+                if pk in PRICES:
+                    continue
+                p = _sp_floor(rn, pump)
+                if p is not None:
+                    PRICES[pk] = p; changed = True
+                time.sleep(1)                           # be gentle on the API
+            if changed:
+                try:
+                    PRICES_FILE.write_text(json.dumps(PRICES))
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[agent {PHONE}] price worker: {e}")
+        time.sleep(300)                                 # rescan for new pets every 5 min
+
+
 # ─────────────────────────── job dispatch ───────────────────────────
 def dispatch(cmd: str) -> str:
     if cmd.startswith("autotrade "):
@@ -325,7 +404,8 @@ def poll(results: list) -> list:
     board, footer, now = build_board()
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
-                       "servers": servers, "srv_now": now, "results": results}).encode()
+                       "servers": servers, "srv_now": now, "prices": PRICES,
+                       "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
                                           "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)
@@ -335,6 +415,7 @@ def poll(results: list) -> list:
 
 def main():
     print(f"[agent {PHONE}] polling {VPS_URL} every {INTERVAL}s")
+    threading.Thread(target=price_worker, daemon=True).start()   # fetch StarPets prices in the background
     results = []
     while True:
         try:

@@ -11,14 +11,11 @@ Config: edit the CONFIG block, or use token.txt (Discord token) + config.txt
 (GUILD_ID / KEY / PHONES / PORT). Phones must send header  X-Key: <KEY>.
 """
 
-import re
-import ssl
 import time
 import json
 import uuid
 import shlex
 import asyncio
-import urllib.request
 from pathlib import Path
 
 import discord
@@ -53,7 +50,7 @@ if _cfg.exists():
 # ─────────────────────────── per-phone state ───────────────────────────
 jobs    = {p: [] for p in PHONES}                                    # pending jobs per phone
 futures = {}                                                         # job_id -> Future (awaiting result)
-reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "srv_now": [], "ts": 0.0} for p in PHONES}
+reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "srv_now": [], "prices": {}, "ts": 0.0} for p in PHONES}
 
 
 def targets(phone: str) -> list:
@@ -114,6 +111,8 @@ async def handle_poll(req: web.Request):
         rep["servers"] = body.get("servers", rep.get("servers", 0))
     if "srv_now" in body:
         rep["srv_now"] = body.get("srv_now", rep.get("srv_now", []))
+    if body.get("prices"):
+        rep["prices"] = body["prices"]
     rep["ts"] = time.time()
     for r in body.get("results", []):
         fut = futures.pop(r.get("id"), None)
@@ -161,8 +160,6 @@ async def on_ready():
     if not getattr(bot, "_http_up", False):
         bot._http_up = True
         await start_http()
-    if not price_refresh.is_running():
-        price_refresh.start()
     print(f"logged in as {bot.user}")
 
 
@@ -291,10 +288,8 @@ async def dash_loop():
 
 @bot.tree.command(description="Auto-updating fleet dashboard: bucks/pets/servers/value (every 30s)")
 async def dashboard(i: discord.Interaction):
-    await i.response.defer()
-    await refresh_prices_once()                 # pull any missing StarPets prices now
-    msg = await i.followup.send(embed=make_dashboard())
-    dash_msgs.append(msg)
+    await i.response.send_message(embed=make_dashboard())
+    dash_msgs.append(await i.original_response())
     if not dash_loop.is_running():
         dash_loop.start()
 
@@ -384,26 +379,10 @@ def _pets_totals(phone: str) -> dict:
     return totals
 
 
-# ─────────────────────── StarPets pricing (est. inventory value) ───────────────────────
-_SP_URL     = "https://market.apineural.com/api/v2/store/items/all"
-_SP_HEADERS = {
-    "content-type": "application/json",
-    "origin": "https://starpets.gg", "referer": "https://starpets.gg/",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-}
-PRICES_FILE = BASE_DIR / "prices.json"          # cache: "realName|pumping" -> USD floor
-PRICES = {}
-# some VPS hosts do TLS interception (self-signed CA) that Python's CA bundle doesn't
-# trust; the price API is public/no-auth, so skip verification for these calls only.
-_SP_CTX = ssl.create_default_context()
-_SP_CTX.check_hostname = False
-_SP_CTX.verify_mode = ssl.CERT_NONE
-if PRICES_FILE.exists():
-    try: PRICES = json.loads(PRICES_FILE.read_text())
-    except Exception: PRICES = {}
-
-
+# ─────────────────────── StarPets value (prices come FROM the phones) ───────────────────────
+# The phones (agent.py) reach the StarPets API cleanly and fetch floor prices for their own
+# pets, sending a "prices" map ("realName|pumping" -> USD) in each poll. The VPS just merges
+# and applies them — no VPS -> StarPets calls (the VPS host does TLS interception).
 def _key_variant(key: str):
     """/pets key -> (realName, pumping).  'shadow_dragon (neon)' -> ('shadow_dragon','neon')."""
     if key.endswith(" (mega neon)"): return key[:-12], "mega_neon"
@@ -411,100 +390,28 @@ def _key_variant(key: str):
     return key, "default"
 
 
-def _sp_floor(real_name: str, pumping: str):
-    """Cheapest StarPets USD listing for this pet + neon/mega variant (or None).
-
-    Adopt Me prefixes event/egg pets (basic_egg_2022_alicorn, summer_2026_river_otter);
-    StarPets' realName is sometimes the full kind, sometimes the bare name. So search by
-    the year-stripped name and match realName against both.
-    """
-    stripped = re.sub(r"^.*?\d{4}_", "", real_name)     # drop egg/event + year prefix
-    names = {real_name, stripped}
-    body = json.dumps({
-        "filter": {"name": stripped.replace("_", " "),
-                   "types": [{"type": t} for t in ("pet", "egg")]},
-        "page": 1, "amount": 50, "currency": "usd", "sort": {"popularity": "desc"},
-    }).encode()
-    items = []
-    for _ in range(3):                                  # the API 400s intermittently
-        try:
-            req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
-            with urllib.request.urlopen(req, timeout=30, context=_SP_CTX) as r:
-                items = json.load(r).get("items", [])
-            break
-        except Exception:
-            time.sleep(2)
-    ps = [it["price"] for it in items
-          if it.get("realName") in names
-          and (it.get("pumping") or "default") == pumping and it.get("price")]
-    return min(ps) if ps else None
+def _all_prices() -> dict:
+    """Merge the price maps reported by every phone."""
+    m = {}
+    for p in PHONES:
+        m.update(reports.get(p, {}).get("prices") or {})
+    return m
 
 
 def _est_value(phone: str):
-    """(total USD, priced pet count, unpriced pet count) from cached StarPets floors."""
+    """(total USD, priced pet count, unpriced pet count) from phone-reported StarPets floors."""
+    prices = _all_prices()
     total, priced, unpriced = 0.0, 0, 0
     for key, v in _pets_totals(phone).items():
         rn, pump = _key_variant(key)
-        p = PRICES.get(f"{rn}|{pump}")
+        p = prices.get(f"{rn}|{pump}")
         if p is None and pump != "default":
-            p = PRICES.get(f"{rn}|default")     # fall back to base variant price
+            p = prices.get(f"{rn}|default")     # fall back to base variant price
         if p is None:
             unpriced += v["count"]
         else:
             total += p * v["count"]; priced += v["count"]
     return total, priced, unpriced
-
-
-@tasks.loop(minutes=5)
-async def price_refresh():
-    """Fetch StarPets floors for any pet kinds we don't have cached yet (cheap: skips cached)."""
-    changed = False
-    for key in list(_pets_totals("all").keys()):
-        rn, pump = _key_variant(key)
-        pk = f"{rn}|{pump}"
-        if pk in PRICES:
-            continue
-        try:
-            price = await asyncio.to_thread(_sp_floor, rn, pump)
-        except Exception:
-            price = None
-        if price is not None:
-            PRICES[pk] = price; changed = True
-        await asyncio.sleep(1)                  # be gentle on the API
-    if changed:
-        try: PRICES_FILE.write_text(json.dumps(PRICES))
-        except Exception: pass
-
-@price_refresh.before_loop
-async def _price_wait():
-    await bot.wait_until_ready()
-
-
-async def refresh_prices_once(limit: int = 80):
-    """Fetch StarPets floors for all currently-uncached pet kinds, concurrently."""
-    todo = []
-    for key in _pets_totals("all"):
-        rn, pump = _key_variant(key)
-        pk = f"{rn}|{pump}"
-        if pk not in PRICES:
-            todo.append((pk, rn, pump))
-    if not todo:
-        return 0
-    sem = asyncio.Semaphore(8)
-    async def one(pk, rn, pump):
-        async with sem:
-            try:
-                p = await asyncio.to_thread(_sp_floor, rn, pump)
-            except Exception:
-                p = None
-            if p is not None:
-                PRICES[pk] = p
-    await asyncio.gather(*(one(*t) for t in todo[:limit]))
-    try:
-        PRICES_FILE.write_text(json.dumps(PRICES))
-    except Exception:
-        pass
-    return len(todo)
 
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
 async def inv(i: discord.Interaction, phone: str = "all"):
