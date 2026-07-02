@@ -41,14 +41,32 @@ if not ClientData or type(ClientData.get_data) ~= "function" then
     return
 end
 
--- ── PetAvatarItemDB: pet id -> { name, rarity, ... }  (the master pet database) ──
-local IDB = loadMod("PetAvatarItemDB")
+-- Pet types (name + rarity) live in the general item/tool DB — PetAvatarItemDB turned out
+-- to be pet ACCESSORIES. Load the candidates and search across them.
+local DBS = {}
+for _, n in ipairs({ "ToolDB", "ItemDB", "PetDB", "PetItemDB", "PetAvatarItemDB" }) do
+    local m = loadMod(n)
+    if type(m) == "table" then DBS[n] = m end
+end
 
 local _inited = false
-local function ensureInit()                -- many Adopt Me DBs are lazy: populate via init()
+local function ensureInit()                -- Adopt Me DBs are often lazy: populate via init()
     if _inited then return end
     _inited = true
-    if type(IDB) == "table" and type(IDB.init) == "function" then pcall(IDB.init) end
+    for _, db in pairs(DBS) do
+        if type(db.init) == "function" then pcall(db.init) end
+    end
+end
+
+local function lookup1(db, kind)
+    if type(db) ~= "table" then return nil end
+    if type(db.items_by_kind) == "table" and db.items_by_kind[kind] ~= nil then return db.items_by_kind[kind] end
+    if type(db.items) == "table" and db.items[kind] ~= nil then return db.items[kind] end
+    if type(db.get_entry_by_id) == "function" then
+        local ok, r = pcall(db.get_entry_by_id, kind); if ok and r ~= nil then return r end
+        local ok2, r2 = pcall(function() return db:get_entry_by_id(kind) end); if ok2 and r2 ~= nil then return r2 end
+    end
+    return nil
 end
 
 local entryCache = {}
@@ -57,17 +75,7 @@ local function itemEntry(kind)
     if c ~= nil then return c or nil end
     ensureInit()
     local e
-    if type(IDB) == "table" then
-        if type(IDB.items_by_kind) == "table" then e = IDB.items_by_kind[kind] end          -- direct (safe) first
-        if e == nil and type(IDB.items) == "table" then e = IDB.items[kind] end
-        if e == nil and type(IDB.get_entry_by_id) == "function" then
-            local ok, r = pcall(IDB.get_entry_by_id, kind); if ok and r ~= nil then e = r end
-            if e == nil then                                                                  -- colon form (self)
-                local ok2, r2 = pcall(function() return IDB:get_entry_by_id(kind) end)
-                if ok2 and r2 ~= nil then e = r2 end
-            end
-        end
-    end
+    for _, db in pairs(DBS) do e = lookup1(db, kind); if e ~= nil then break end end
     entryCache[kind] = e or false
     return e
 end
@@ -110,21 +118,18 @@ local function count(t)
     return c
 end
 
--- one-time diagnostic: why did the ItemDB lookup return nothing?
+-- one-time diagnostic: which DB holds the pet, and what does its entry look like?
 local function idbDebug(kind)
     ensureInit()
-    local d = { idb_type = type(IDB) }
-    if type(IDB) == "table" then
-        d.idb_keys        = firstkeys(IDB, 20)
-        d.items_by_kind_n = count(IDB.items_by_kind)
-        d.items_n         = count(IDB.items)
-        d.key_sample      = firstkeys(IDB.items_by_kind, 8)   -- how is it actually keyed?
-        if type(IDB.get_entry_by_id) == "function" then
-            local ok, r  = pcall(IDB.get_entry_by_id, kind)
-            local ok2, r2 = pcall(function() return IDB:get_entry_by_id(kind) end)
-            d.get_dot   = ok  and shallow(r)  or ("err: " .. tostring(r))
-            d.get_colon = ok2 and shallow(r2) or ("err: " .. tostring(r2))
-        end
+    local d = { loaded = firstkeys(DBS, 10) }
+    for n, db in pairs(DBS) do
+        local e = lookup1(db, kind)
+        d[n] = {
+            items_by_kind_n = count(db.items_by_kind),
+            items_n         = count(db.items),
+            key_sample      = firstkeys(db.items_by_kind, 6),
+            hit             = (e ~= nil) and shallow(e) or false,
+        }
     end
     return d
 end
