@@ -44,16 +44,28 @@ end
 -- ── PetAvatarItemDB: pet id -> { name, rarity, ... }  (the master pet database) ──
 local IDB = loadMod("PetAvatarItemDB")
 
+local _inited = false
+local function ensureInit()                -- many Adopt Me DBs are lazy: populate via init()
+    if _inited then return end
+    _inited = true
+    if type(IDB) == "table" and type(IDB.init) == "function" then pcall(IDB.init) end
+end
+
 local entryCache = {}
 local function itemEntry(kind)
     local c = entryCache[kind]
     if c ~= nil then return c or nil end
+    ensureInit()
     local e
     if type(IDB) == "table" then
         if type(IDB.items_by_kind) == "table" then e = IDB.items_by_kind[kind] end          -- direct (safe) first
         if e == nil and type(IDB.items) == "table" then e = IDB.items[kind] end
         if e == nil and type(IDB.get_entry_by_id) == "function" then
-            local ok, r = pcall(IDB.get_entry_by_id, kind); if ok then e = r end
+            local ok, r = pcall(IDB.get_entry_by_id, kind); if ok and r ~= nil then e = r end
+            if e == nil then                                                                  -- colon form (self)
+                local ok2, r2 = pcall(function() return IDB:get_entry_by_id(kind) end)
+                if ok2 and r2 ~= nil then e = r2 end
+            end
         end
     end
     entryCache[kind] = e or false
@@ -83,6 +95,38 @@ local function shallow(t)
         end
     end
     return o
+end
+
+local function firstkeys(t, n)
+    local a = {}
+    if type(t) == "table" then
+        for k in pairs(t) do a[#a + 1] = tostring(k); if #a >= n then break end end
+    end
+    return a
+end
+local function count(t)
+    local c = 0
+    if type(t) == "table" then for _ in pairs(t) do c = c + 1 end end
+    return c
+end
+
+-- one-time diagnostic: why did the ItemDB lookup return nothing?
+local function idbDebug(kind)
+    ensureInit()
+    local d = { idb_type = type(IDB) }
+    if type(IDB) == "table" then
+        d.idb_keys        = firstkeys(IDB, 20)
+        d.items_by_kind_n = count(IDB.items_by_kind)
+        d.items_n         = count(IDB.items)
+        d.key_sample      = firstkeys(IDB.items_by_kind, 8)   -- how is it actually keyed?
+        if type(IDB.get_entry_by_id) == "function" then
+            local ok, r  = pcall(IDB.get_entry_by_id, kind)
+            local ok2, r2 = pcall(function() return IDB:get_entry_by_id(kind) end)
+            d.get_dot   = ok  and shallow(r)  or ("err: " .. tostring(r))
+            d.get_colon = ok2 and shallow(r2) or ("err: " .. tostring(r2))
+        end
+    end
+    return d
 end
 
 -- ── Read stats ──
@@ -120,6 +164,7 @@ local function getStats()
                             kind         = kind,
                             itemdb_entry = shallow(itemEntry(kind)),
                             resolved     = { name = nameOf(kind), rarity = rarityOf(kind) },
+                            idb_debug    = idbDebug(kind),
                         }
                     end
                     local age  = tonumber(props.age) or 0
