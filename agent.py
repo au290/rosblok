@@ -277,6 +277,7 @@ _SP_HEADERS = {
 }
 PRICES_FILE = RUN_DIR / "prices.json"
 PRICES = {}
+RARITIES = {}          # realName -> rarity (from StarPets), sent to the VPS for /pets colors
 if PRICES_FILE.exists():
     try:
         PRICES = json.loads(PRICES_FILE.read_text())
@@ -290,56 +291,73 @@ def _key_variant(key: str):
     return key, "default"
 
 
+def _plog(msg):
+    print(f"[price {PHONE}] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+
+
 def _sp_floor(real_name: str, pumping: str):
-    """Cheapest StarPets USD listing for this pet + variant. Adopt Me prefixes event/egg
-    pets; StarPets realName is sometimes the full kind, sometimes the bare name — search by
-    the year-stripped name and match realName against both."""
+    """(floor USD, rarity) for this pet + variant, or (None, None). Adopt Me prefixes
+    event/egg pets; StarPets realName is sometimes the full kind, sometimes the bare name —
+    search by the year-stripped name and match realName against both. Logs failures."""
     stripped = re.sub(r"^.*?\d{4}_", "", real_name)
     names = {real_name, stripped}
     body = json.dumps({"filter": {"name": stripped.replace("_", " "),
                                   "types": [{"type": t} for t in ("pet", "egg")]},
                        "page": 1, "amount": 50, "currency": "usd",
                        "sort": {"popularity": "desc"}}).encode()
-    items = []
-    for _ in range(3):                                  # the API 400s intermittently
+    items, last_err = [], None
+    for attempt in range(3):                            # the API 400s intermittently
         try:
             req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
             with urllib.request.urlopen(req, timeout=30) as r:
                 items = json.load(r).get("items", [])
             break
-        except Exception:
+        except Exception as e:
+            last_err = e
             time.sleep(2)
-    ps = [it["price"] for it in items
-          if it.get("realName") in names
-          and (it.get("pumping") or "default") == pumping and it.get("price")]
-    return min(ps) if ps else None
+    if not items:
+        _plog(f"{real_name}: fetch failed ({last_err})")
+        return None, None
+    matches = [it for it in items if it.get("realName") in names
+               and (it.get("pumping") or "default") == pumping and it.get("price")]
+    if not matches:
+        _plog(f"{real_name}|{pumping}: 0 matches in {len(items)} results (search='{stripped}')")
+        return None, None
+    floor = min(it["price"] for it in matches)
+    rarity = matches[0].get("rare")
+    return floor, rarity
 
 
 def price_worker():
-    """Background loop: fetch + cache StarPets floors for this phone's pets."""
+    """Background loop: fetch + cache StarPets floors + rarity for this phone's pets."""
+    _plog(f"started (VPS <- prices from this phone)")
     while True:
         try:
             keys = set()
             for d in read_inv().values():
                 if isinstance(d, dict):
                     keys.update((d.get("pets") or {}).get("by_type") or {})
-            changed = False
-            for key in keys:
+            todo = [k for k in keys if f"{_key_variant(k)[0]}|{_key_variant(k)[1]}" not in PRICES]
+            _plog(f"scan: {len(keys)} pet kinds, {len(todo)} to fetch, {len(PRICES)} cached")
+            ok, changed = 0, False
+            for key in todo:
                 rn, pump = _key_variant(key)
                 pk = f"{rn}|{pump}"
-                if pk in PRICES:
-                    continue
-                p = _sp_floor(rn, pump)
-                if p is not None:
-                    PRICES[pk] = p; changed = True
+                price, rarity = _sp_floor(rn, pump)
+                if price is not None:
+                    PRICES[pk] = price; ok += 1; changed = True
+                    if rarity:
+                        RARITIES[rn] = rarity
+                    _plog(f"{rn}|{pump} = ${price} ({rarity})")
                 time.sleep(1)                           # be gentle on the API
             if changed:
                 try:
                     PRICES_FILE.write_text(json.dumps(PRICES))
-                except Exception:
-                    pass
+                except Exception as e:
+                    _plog(f"cache write failed: {e}")
+            _plog(f"done: {ok}/{len(todo)} priced, {len(PRICES)} total")
         except Exception as e:
-            print(f"[agent {PHONE}] price worker: {e}")
+            _plog(f"worker error: {e}")
         time.sleep(300)                                 # rescan for new pets every 5 min
 
 
@@ -405,7 +423,7 @@ def poll(results: list) -> list:
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
                        "servers": servers, "srv_now": now, "prices": PRICES,
-                       "results": results}).encode()
+                       "rarities": RARITIES, "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
                                           "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)

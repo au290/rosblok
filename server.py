@@ -11,6 +11,7 @@ Config: edit the CONFIG block, or use token.txt (Discord token) + config.txt
 (GUILD_ID / KEY / PHONES / PORT). Phones must send header  X-Key: <KEY>.
 """
 
+import re
 import time
 import json
 import uuid
@@ -50,7 +51,7 @@ if _cfg.exists():
 # ─────────────────────────── per-phone state ───────────────────────────
 jobs    = {p: [] for p in PHONES}                                    # pending jobs per phone
 futures = {}                                                         # job_id -> Future (awaiting result)
-reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "srv_now": [], "prices": {}, "ts": 0.0} for p in PHONES}
+reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "srv_now": [], "prices": {}, "rarities": {}, "ts": 0.0} for p in PHONES}
 
 
 def targets(phone: str) -> list:
@@ -113,6 +114,8 @@ async def handle_poll(req: web.Request):
         rep["srv_now"] = body.get("srv_now", rep.get("srv_now", []))
     if body.get("prices"):
         rep["prices"] = body["prices"]
+    if body.get("rarities"):
+        rep["rarities"] = body["rarities"]
     rep["ts"] = time.time()
     for r in body.get("results", []):
         fut = futures.pop(r.get("id"), None)
@@ -261,8 +264,13 @@ def make_dashboard() -> discord.Embed:
     # top pets across the whole fleet, coloured by rarity
     top = sorted(_pets_totals("all").items(), key=lambda kv: -kv[1]["count"])[:10]
     if top:
-        lines = [f"{_rarity_ansi(v['rarity'])}{v['count']:>4} {v['fg']:>3}FG  {pid}{_ANSI_RESET}"
-                 for pid, v in top]
+        rar = _all_rarities()
+        lines = []
+        for pid, v in top:
+            rn = _key_variant(pid)[0]
+            rarity = rar.get(rn) or v.get("rarity") or ""
+            tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+            lines.append(f"{_rarity_ansi(rarity)}{v['count']:>4} {v['fg']:>3}FG  {_display_name(rn)}{tag}{_ANSI_RESET}")
         e.add_field(name="🔝 Top pets (fleet)", value="```ansi\n" + "\n".join(lines)[:990] + "\n```",
                     inline=False)
     val, priced, unpriced = _est_value("all")
@@ -398,6 +406,21 @@ def _all_prices() -> dict:
     return m
 
 
+def _all_rarities() -> dict:
+    """Merge the StarPets rarity maps (realName -> rarity) reported by every phone."""
+    m = {}
+    for p in PHONES:
+        m.update(reports.get(p, {}).get("rarities") or {})
+    return m
+
+
+def _display_name(kind: str) -> str:
+    """Clean pet name from the kind: drop egg/event+year prefix, title-case.
+    basic_egg_2022_alicorn -> Alicorn ; summer_2026_river_otter -> River Otter."""
+    base = re.sub(r"^.*?\d{4}_", "", kind)
+    return base.replace("_", " ").title()
+
+
 def _est_value(phone: str):
     """(total USD, priced pet count, unpriced pet count) from phone-reported StarPets floors."""
     prices = _all_prices()
@@ -441,17 +464,21 @@ async def pets(i: discord.Interaction, phone: str = "all"):
     totals = _pets_totals(phone)
     if not totals:
         return await i.response.send_message(f"[{phone}] no pets found")
+    rar = _all_rarities()
     tot   = sum(v["count"] for v in totals.values())
     totfg = sum(v["fg"] for v in totals.values())
     rows = []
-    for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])[:45]:
-        line = f"{v['count']:>4} {v['fg']:>4}FG  {(v['rarity'] or '?')[:9]:<9} {pid}"
-        rows.append(_rarity_ansi(v["rarity"]) + line + _ANSI_RESET)   # colour whole row by rarity
+    for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])[:40]:
+        rn = _key_variant(pid)[0]
+        rarity = rar.get(rn) or v.get("rarity") or ""
+        tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+        line = f"{v['count']:>4} {v['fg']:>4}FG  {_display_name(rn)}{tag}"
+        rows.append(_rarity_ansi(rarity) + line + _ANSI_RESET)   # colour whole row by rarity
     legend = (f"{_rarity_ansi('legendary')}Legendary {_rarity_ansi('ultra')}Ultra "
               f"{_rarity_ansi('rare')}Rare {_rarity_ansi('uncommon')}Uncommon "
               f"{_rarity_ansi('common')}Common{_ANSI_RESET}")
     e = discord.Embed(title=f"🐾 Pets · {phone}", color=0x2ECC71, timestamp=discord.utils.utcnow())
-    e.description = "```ansi\n" + legend + "\ncnt   fg  rarity    pet\n" + "\n".join(rows) + "\n```"
+    e.description = "```ansi\n" + legend + "\ncnt   fg  pet\n" + "\n".join(rows) + "\n```"
     e.add_field(name="🐾 Total",      value=f"{tot}", inline=True)
     e.add_field(name="🌟 Full grown", value=f"{totfg}", inline=True)
     e.add_field(name="🔖 Types",      value=f"{len(totals)}", inline=True)

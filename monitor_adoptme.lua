@@ -1,6 +1,10 @@
 -- monitor_adoptme.lua — Adopt Me inventory dump (file-only, no server)
 -- Place in your executor autoexec. Every INTERVAL seconds it writes
 -- inv/<player>.json into the executor workspace; the Discord bot's /inv reads it.
+--
+-- Pets are grouped by kind (+neon/mega) with a full-grown count. Display name and
+-- rarity are resolved OFF-GAME (kind -> clean name on the bot; rarity from StarPets),
+-- so this script stays tiny and never touches the game's pet databases.
 
 local RS          = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -13,129 +17,24 @@ local INTERVAL = 30
 local FG_AGE   = 5                       -- ages 0..5 (Newborn..Full Grown)
 local LP       = Players.LocalPlayer
 
--- ── Module loader (Fsys.load, or require from RS.ClientDB / ClientModules) ──
-local Fsys
-pcall(function() Fsys = require(RS.Fsys) end)
-
-local function loadMod(name)
-    if Fsys and Fsys.load then
-        local ok, m = pcall(function() return Fsys.load(name) end)
-        if ok and m ~= nil then return m end
-    end
-    local cdb = RS:FindFirstChild("ClientDB")
-    if cdb and cdb:FindFirstChild(name) then
-        local ok, m = pcall(function() return require(cdb[name]) end)
-        if ok then return m end
-    end
-    return nil
-end
-
 -- ── ClientData (bucks + inventory) ──
-local ClientData = loadMod("ClientData")
-if not ClientData then
-    local ok, m = pcall(function() return require(RS.ClientModules.Core.ClientData) end)
-    if ok then ClientData = m end
+local ClientData
+do
+    local okF, Fsys = pcall(function() return require(RS.Fsys) end)
+    if okF and Fsys and Fsys.load then
+        local okL, mod = pcall(function() return Fsys.load("ClientData") end)
+        if okL then ClientData = mod end
+    end
+    if not ClientData then
+        local okD, mod = pcall(function() return require(RS.ClientModules.Core.ClientData) end)
+        if okD then ClientData = mod end
+    end
 end
 if not ClientData or type(ClientData.get_data) ~= "function" then
     warn("[monitor] could not load Adopt Me ClientData — aborting")
     return
 end
 
--- Pet types (name + rarity) live in the general item/tool DB — PetAvatarItemDB turned out
--- to be pet ACCESSORIES. Load the candidates and search across them.
-local DBS = {}
-for _, n in ipairs({ "ToolDB", "ItemDB", "PetDB", "PetItemDB", "PetAvatarItemDB" }) do
-    local m = loadMod(n)
-    if type(m) == "table" then DBS[n] = m end
-end
-
-local _inited = false
-local function ensureInit()                -- Adopt Me DBs are often lazy: populate via init()
-    if _inited then return end
-    _inited = true
-    for _, db in pairs(DBS) do
-        if type(db.init) == "function" then pcall(db.init) end
-    end
-end
-
-local function lookup1(db, kind)
-    if type(db) ~= "table" then return nil end
-    if type(db.items_by_kind) == "table" and db.items_by_kind[kind] ~= nil then return db.items_by_kind[kind] end
-    if type(db.items) == "table" and db.items[kind] ~= nil then return db.items[kind] end
-    if type(db.get_entry_by_id) == "function" then
-        local ok, r = pcall(db.get_entry_by_id, kind); if ok and r ~= nil then return r end
-        local ok2, r2 = pcall(function() return db:get_entry_by_id(kind) end); if ok2 and r2 ~= nil then return r2 end
-    end
-    return nil
-end
-
-local entryCache = {}
-local function itemEntry(kind)
-    local c = entryCache[kind]
-    if c ~= nil then return c or nil end
-    ensureInit()
-    local e
-    for _, db in pairs(DBS) do e = lookup1(db, kind); if e ~= nil then break end end
-    entryCache[kind] = e or false
-    return e
-end
-
-local function pick(v)                     -- name/rarity may be a string or {name=..}/{id=..}
-    if type(v) == "string" then return v end
-    if type(v) == "table" then return v.name or v.id or v.display_name end
-    return nil
-end
-local function rarityOf(kind)
-    local e = itemEntry(kind)
-    if type(e) == "table" then return pick(e.rarity or e.Rarity or e.rarity_name or e.pet_rarity) end
-end
-local function nameOf(kind)
-    local e = itemEntry(kind)
-    if type(e) == "table" then return pick(e.name or e.display_name or e.displayName or e.title) end
-end
-
--- shallow, JSON-safe copy (one level) — for the one-time calibration sample
-local function shallow(t)
-    local o = {}
-    if type(t) == "table" then
-        for k, v in pairs(t) do
-            o[tostring(k)] = (type(v) == "table") and "{table}" or tostring(v)
-        end
-    end
-    return o
-end
-
-local function firstkeys(t, n)
-    local a = {}
-    if type(t) == "table" then
-        for k in pairs(t) do a[#a + 1] = tostring(k); if #a >= n then break end end
-    end
-    return a
-end
-local function count(t)
-    local c = 0
-    if type(t) == "table" then for _ in pairs(t) do c = c + 1 end end
-    return c
-end
-
--- one-time diagnostic: which DB holds the pet, and what does its entry look like?
-local function idbDebug(kind)
-    ensureInit()
-    local d = { loaded = firstkeys(DBS, 10) }
-    for n, db in pairs(DBS) do
-        local e = lookup1(db, kind)
-        d[n] = {
-            db_keys         = firstkeys(db, 25),          -- the DB's own methods/fields
-            items_by_kind_n = count(db.items_by_kind),
-            items_n         = count(db.items),
-            key_sample      = firstkeys(db.items_by_kind, 6),
-            hit             = (e ~= nil) and shallow(e) or false,
-        }
-    end
-    return d
-end
-
--- ── Read stats ──
 local function getMe()
     local ok, all = pcall(function() return ClientData.get_data() end)
     if not ok or type(all) ~= "table" then return nil end
@@ -149,7 +48,6 @@ local function getStats()
 
     local petCount, eggCount = 0, 0
     local byType, eggsByType = {}, {}
-    local sample
     local pets = me.inventory and me.inventory.pets
     if type(pets) == "table" then
         for _, item in pairs(pets) do
@@ -163,16 +61,6 @@ local function getStats()
                     eggsByType[kind] = (eggsByType[kind] or 0) + 1
                 else
                     petCount = petCount + 1
-                    if not sample then     -- dump one pet + its DB entry so we can confirm fields
-                        sample = {
-                            top          = shallow(item),
-                            properties   = shallow(props),
-                            kind         = kind,
-                            itemdb_entry = shallow(itemEntry(kind)),
-                            resolved     = { name = nameOf(kind), rarity = rarityOf(kind) },
-                            idb_debug    = idbDebug(kind),
-                        }
-                    end
                     local age  = tonumber(props.age) or 0
                     local neon = props.neon == true
                     local mega = props.mega_neon == true
@@ -180,8 +68,7 @@ local function getStats()
                     if mega then key = key .. " (mega neon)" elseif neon then key = key .. " (neon)" end
                     local t = byType[key]
                     if not t then
-                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega,
-                              rarity = rarityOf(kind), name = nameOf(kind) }
+                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega }
                         byType[key] = t
                     end
                     t.count = t.count + 1
@@ -190,7 +77,7 @@ local function getStats()
             end
         end
     end
-    return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType, sample = sample }
+    return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType }
 end
 
 -- ── Dump to file ──
@@ -205,9 +92,6 @@ local function dump()
             stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs },
             pets   = pets,
         }))
-        if pets.sample then
-            writefile("inv/_sample.json", HttpService:JSONEncode(pets.sample))
-        end
     end)
     print(string.format("[monitor] %s | bucks:%d pets:%d eggs:%d", LP.Name, money, pets.count, pets.eggs))
 end
