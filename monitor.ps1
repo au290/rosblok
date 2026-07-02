@@ -43,7 +43,7 @@ function Write-Html($rows) {
     $mem    = ($rows | ForEach-Object { $_.mem_pct }) -join ','
     $peakC  = ($rows | Measure-Object cpu     -Maximum).Maximum
     $peakM  = ($rows | Measure-Object mem_pct -Maximum).Maximum
-    $html = @"
+    $page = @"
 <!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="$IntervalSec">
 <title>VPS monitor</title>
@@ -63,7 +63,7 @@ new Chart(document.getElementById('c'),{type:'line',
   plugins:{legend:{labels:{color:'#eee'}}}}});
 </script></body></html>
 "@
-    $html | Out-File -Encoding utf8 $Html
+    $page | Out-File -Encoding utf8 $Html
 }
 
 function Chart-Url($rows) {
