@@ -278,6 +278,7 @@ _SP_HEADERS = {
 PRICES_FILE = RUN_DIR / "prices.json"
 PRICES = {}
 RARITIES = {}          # realName -> rarity (from StarPets), sent to the VPS for /pets colors
+PRICE_LOG = []         # recent price-worker log lines, surfaced by /pricelog
 if PRICES_FILE.exists():
     try:
         PRICES = json.loads(PRICES_FILE.read_text())
@@ -292,7 +293,11 @@ def _key_variant(key: str):
 
 
 def _plog(msg):
-    print(f"[price {PHONE}] {time.strftime('%H:%M:%S')} {msg}", flush=True)
+    line = f"{time.strftime('%H:%M:%S')} {msg}"
+    PRICE_LOG.append(line)
+    if len(PRICE_LOG) > 60:
+        del PRICE_LOG[0]
+    print(f"[price {PHONE}] {line}", flush=True)
 
 
 def _sp_floor(real_name: str, pumping: str):
@@ -367,6 +372,9 @@ def dispatch(cmd: str) -> str:
         return do_autotrade(json.loads(cmd[len("autotrade "):]))
     p = shlex.split(cmd)
     v, a = p[0], p[1:]
+    if v == "pricelog":
+        return (f"prices cached: {len(PRICES)} · rarities: {len(RARITIES)}\n"
+                + ("\n".join(PRICE_LOG[-24:]) or "(no price activity yet)"))
     if v == "start":     return start_hopper(int(a[0]))
     if v == "stop":      return stop_hopper(int(a[0]))
     if v == "restart":   stop_hopper(int(a[0])); return start_hopper(int(a[0]))

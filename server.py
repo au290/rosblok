@@ -456,6 +456,10 @@ async def inv(i: discord.Interaction, phone: str = "all"):
     e.add_field(name="🐾 Pets",     value=f"{su['pets']}  ·  {su['fg']} FG  ·  {su['eggs']}🥚", inline=True)
     await i.response.send_message(embed=e)
 
+@bot.tree.command(description="Show a phone's StarPets price-fetch log (why value is/isn't priced)")
+async def pricelog(i: discord.Interaction, phone: str = "A"):
+    await job_reply(i, phone, "pricelog", code=True)
+
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
 async def pets(i: discord.Interaction, phone: str = "all"):
     data = _inv_of(phone)
