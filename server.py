@@ -249,6 +249,13 @@ def make_dashboard() -> discord.Embed:
     e = discord.Embed(title=f"{dot} Fleet Dashboard", color=color, timestamp=discord.utils.utcnow())
     for name, value in fields:
         e.add_field(name=name, value=value, inline=False)
+    # top pets across the whole fleet, coloured by rarity
+    top = sorted(_pets_totals("all").items(), key=lambda kv: -kv[1]["count"])[:10]
+    if top:
+        lines = [f"{_rarity_ansi(v['rarity'])}{v['count']:>4} {v['fg']:>3}FG  {pid}{_ANSI_RESET}"
+                 for pid, v in top]
+        e.add_field(name="🔝 Top pets (fleet)", value="```ansi\n" + "\n".join(lines)[:990] + "\n```",
+                    inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
                      f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   **{up}/{len(PHONES)}** phones online")
     e.set_footer(text="fleet summary · auto-updates every 30s")
@@ -341,6 +348,21 @@ def _inv_summary(phone: str) -> dict:
                 su["fg"] += info.get("fg", 0)
     return su
 
+
+def _pets_totals(phone: str) -> dict:
+    """kind(+neon/mega) -> {count, fg, rarity} aggregated across the target phone(s)."""
+    totals = {}
+    for d in _inv_of(phone):
+        for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
+            if not isinstance(info, dict):
+                continue
+            t = totals.setdefault(pid, {"count": 0, "fg": 0, "rarity": ""})
+            t["count"] += info.get("count", 0)
+            t["fg"]    += info.get("fg", 0)
+            if info.get("rarity"):
+                t["rarity"] = str(info["rarity"])
+    return totals
+
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
 async def inv(i: discord.Interaction, phone: str = "all"):
     data = _inv_of(phone)
@@ -366,16 +388,7 @@ async def pets(i: discord.Interaction, phone: str = "all"):
     data = _inv_of(phone)
     if not data:
         return await i.response.send_message(f"[{phone}] no inv reported")
-    totals = {}   # kind(+neon/mega) -> {count, fg, rarity}
-    for d in data:
-        for pid, info in ((d.get("pets") or {}).get("by_type") or {}).items():
-            if not isinstance(info, dict):
-                continue
-            t = totals.setdefault(pid, {"count": 0, "fg": 0, "rarity": ""})
-            t["count"] += info.get("count", 0)
-            t["fg"]    += info.get("fg", 0)
-            if info.get("rarity"):
-                t["rarity"] = str(info["rarity"])
+    totals = _pets_totals(phone)
     if not totals:
         return await i.response.send_message(f"[{phone}] no pets found")
     tot   = sum(v["count"] for v in totals.values())
