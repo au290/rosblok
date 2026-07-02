@@ -117,6 +117,11 @@ local function firstkeys(t, n)   -- up to n top-level keys of a table (for the r
     return a
 end
 
+local function dumpval(v)        -- table -> shallow copy; anything else -> string (so a bare name/rarity shows)
+    if type(v) == "table" then return shallow(v) end
+    return tostring(v)
+end
+
 local function getStats()
     local me = getMe()
     if not me then return nil end
@@ -142,21 +147,29 @@ local function getStats()
                 else
                     petCount = petCount + 1
                     if not sample then
-                        sample = { top = shallow(item), properties = shallow(props) }
-                        -- deep-probe the promising modules: dump their shape / call result for this kind
+                        local stripped = kind:gsub("^.-%d%d%d%d_", "")   -- drop egg/event + year
+                        sample = { top = shallow(item), properties = shallow(props),
+                                   kind = kind, stripped = stripped }
+                        -- deep-probe promising modules: dump shape + lookups by full AND bare name
                         local DEEP = { Pets = 1, PetDisplayInfo = 1, PetAvatarItemDB = 1,
-                                       PetAvatarCategoriesDB = 1, PetProducts = 1, PetAppearance = 1 }
+                                       PetAvatarCategoriesDB = 1, PetProducts = 1, PetAppearance = 1,
+                                       PetName = 1, PetColorHelper = 1 }
                         local dp = {}
                         for n, mod in pairs(raritySrc) do
                             if DEEP[n] then
                                 local d = { type = type(mod) }
                                 if type(mod) == "table" then
-                                    d.keys = firstkeys(mod, 25)
-                                    if mod[kind] ~= nil then d.kind_entry = shallow(mod[kind]) end
+                                    local cnt = 0
+                                    for _ in pairs(mod) do cnt = cnt + 1 end
+                                    d.key_count   = cnt
+                                    d.sample_keys = firstkeys(mod, 20)
+                                    if mod[kind]     ~= nil then d.by_kind     = dumpval(mod[kind])     end
+                                    if mod[stripped] ~= nil then d.by_stripped = dumpval(mod[stripped]) end
                                 else
-                                    local ok, r = pcall(mod, kind)
-                                    d.call_ok = ok
-                                    if ok then d.call_result = shallow(r) end
+                                    local ok1, r1 = pcall(mod, kind)
+                                    local ok2, r2 = pcall(mod, stripped)
+                                    d.call_kind     = ok1 and dumpval(r1) or ("err: " .. tostring(r1))
+                                    d.call_stripped = ok2 and dumpval(r2) or ("err: " .. tostring(r2))
                                 end
                                 dp[n] = d
                             end
