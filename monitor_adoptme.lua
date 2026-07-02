@@ -125,6 +125,7 @@ local function idbDebug(kind)
     for n, db in pairs(DBS) do
         local e = lookup1(db, kind)
         d[n] = {
+            db_keys         = firstkeys(db, 25),          -- the DB's own methods/fields
             items_by_kind_n = count(db.items_by_kind),
             items_n         = count(db.items),
             key_sample      = firstkeys(db.items_by_kind, 6),
