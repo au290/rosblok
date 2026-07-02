@@ -323,7 +323,8 @@ def poll(results: list) -> list:
     board, footer = build_board()
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(), "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
-                                 headers={"Content-Type": "application/json", "X-Key": KEY})
+                                 headers={"Content-Type": "application/json", "X-Key": KEY,
+                                          "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)
     with urllib.request.urlopen(req, timeout=25) as r:
         return json.loads(r.read().decode()).get("jobs", [])
 
