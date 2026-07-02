@@ -11,6 +11,7 @@ Config: edit the CONFIG block, or use token.txt (Discord token) + config.txt
 (GUILD_ID / KEY / PHONES / PORT). Phones must send header  X-Key: <KEY>.
 """
 
+import re
 import time
 import json
 import uuid
@@ -395,9 +396,16 @@ def _key_variant(key: str):
 
 
 def _sp_floor(real_name: str, pumping: str):
-    """Cheapest StarPets USD listing matching this realName + neon/mega variant (or None)."""
+    """Cheapest StarPets USD listing for this pet + neon/mega variant (or None).
+
+    Adopt Me prefixes event/egg pets (basic_egg_2022_alicorn, summer_2026_river_otter);
+    StarPets' realName is sometimes the full kind, sometimes the bare name. So search by
+    the year-stripped name and match realName against both.
+    """
+    stripped = re.sub(r"^.*?\d{4}_", "", real_name)     # drop egg/event + year prefix
+    names = {real_name, stripped}
     body = json.dumps({
-        "filter": {"name": real_name.replace("_", " "),
+        "filter": {"name": stripped.replace("_", " "),
                    "types": [{"type": t} for t in ("pet", "egg")]},
         "page": 1, "amount": 50, "currency": "usd", "sort": {"popularity": "desc"},
     }).encode()
@@ -411,7 +419,7 @@ def _sp_floor(real_name: str, pumping: str):
         except Exception:
             time.sleep(2)
     ps = [it["price"] for it in items
-          if it.get("realName") == real_name
+          if it.get("realName") in names
           and (it.get("pumping") or "default") == pumping and it.get("price")]
     return min(ps) if ps else None
 
