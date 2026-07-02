@@ -66,15 +66,22 @@ new Chart(document.getElementById('c'),{type:'line',
     $html | Out-File -Encoding utf8 $Html
 }
 
-function Spark($vals) {
-    $b = 0x2581..0x2588 | ForEach-Object { [char]$_ }      # levels: lowest .. full block
-    $last = @($vals | Select-Object -Last 30)
-    if ($last.Count -eq 0) { return "" }
-    -join ($last | ForEach-Object {
-        $i = [int][math]::Round(([double]$_ / 100) * 7)
-        if ($i -lt 0) { $i = 0 } elseif ($i -gt 7) { $i = 7 }
-        $b[$i]
-    })
+function Chart-Url($rows) {
+    # Downsample to <=40 points (keeps the URL short) and render via QuickChart -> PNG.
+    $n = $rows.Count
+    $step = [math]::Max(1, [math]::Ceiling($n / 40))
+    $s = @()
+    for ($k = 0; $k -lt $n; $k += $step) { $s += $rows[$k] }
+    if ($s.Count -eq 0 -or $s[-1].time -ne $rows[-1].time) { $s += $rows[-1] }   # always include latest
+    $labels = ($s | ForEach-Object { '"' + ([datetime]$_.time).ToString('HH:mm') + '"' }) -join ','
+    $cpu    = ($s | ForEach-Object { $_.cpu })     -join ','
+    $mem    = ($s | ForEach-Object { $_.mem_pct }) -join ','
+    # Chart.js v2 syntax (QuickChart default): yAxes array, ticks min/max
+    $cfg = '{"type":"line","data":{"labels":[' + $labels + '],"datasets":[' +
+           '{"label":"CPU %","data":[' + $cpu + '],"borderColor":"#e74c3c","backgroundColor":"#e74c3c33","fill":true,"pointRadius":0,"borderWidth":2},' +
+           '{"label":"Mem %","data":[' + $mem + '],"borderColor":"#3498db","backgroundColor":"#3498db33","fill":true,"pointRadius":0,"borderWidth":2}]},' +
+           '"options":{"scales":{"yAxes":[{"ticks":{"min":0,"max":100}}]}}}'
+    return "https://quickchart.io/chart?bkg=%23111111&w=640&h=280&c=" + [uri]::EscapeDataString($cfg)
 }
 
 function Build-Embed($rows) {
@@ -85,22 +92,16 @@ function Build-Embed($rows) {
     $peakM  = ($rows | Measure-Object mem_pct -Maximum).Maximum
     $worst  = [math]::Max($cpuNow, $memNow)
     $color  = if ($worst -ge 90) { 15158332 } elseif ($worst -ge 70) { 15105570 } else { 3066993 }  # red/orange/green
-    $bt3    = ([char]96).ToString() * 3
-    $nl     = [char]10
-    $desc   = $bt3 + $nl +
-              ("CPU {0} {1,3}%" -f (Spark ($rows | ForEach-Object { $_.cpu })),     $cpuNow)      + $nl +
-              ("MEM {0} {1,3}%" -f (Spark ($rows | ForEach-Object { $_.mem_pct })), [int]$memNow) + $nl +
-              $bt3
     return @{
-        title       = "VPS monitor - last ${RetentionHours}h"
-        color       = $color
-        description  = $desc
-        fields      = @(
+        title  = "VPS monitor - last ${RetentionHours}h"
+        color  = $color
+        image  = @{ url = (Chart-Url $rows) }          # the graph, rendered by QuickChart
+        fields = @(
             @{ name = "CPU now";  value = "$cpuNow%";                          inline = $true }
             @{ name = "Mem now";  value = "$memNow% ($($now.mem_used_mb) MB)"; inline = $true }
             @{ name = "24h peak"; value = "CPU $peakC% / Mem $peakM%";         inline = $true }
         )
-        footer      = @{ text = "updated $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $($rows.Count) samples" }
+        footer = @{ text = "updated $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - $($rows.Count) samples" }
     }
 }
 

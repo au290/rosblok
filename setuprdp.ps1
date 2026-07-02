@@ -63,28 +63,15 @@ WriteAscii "token.txt"  ($tok + "`n")
 WriteAscii "config.txt" "GUILD_ID=$gid`nKEY=$key`nPHONES=$phs`n"
 if ($wh) { WriteAscii "webhook.txt" ($wh + "`n") }
 
-# 4) launch - Scheduled Task (survives reboot) with fallback to a hidden window
-$persist = Ask "Run at every boot via Scheduled Task? (y/n)" "y"
-function Launch($file, $task) {
+# 4) launch in visible windows (box is never rebooted, so no autostart needed)
+function Launch($file) {
     $arg = "-ExecutionPolicy Bypass -File `"$(Join-Path $PSScriptRoot $file)`""
-    if ($persist -eq "y") {
-        try {
-            $a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
-            $t = New-ScheduledTaskTrigger -AtStartup
-            Register-ScheduledTask -TaskName $task -Action $a -Trigger $t -RunLevel Highest -Force | Out-Null
-            Start-ScheduledTask -TaskName $task
-            Write-Host "[setup] scheduled + started: $task"
-            return
-        } catch {
-            Write-Host "[setup] scheduled task failed ($_); launching in a window instead"
-        }
-    }
-    Start-Process powershell -ArgumentList $arg -WindowStyle Hidden
+    Start-Process powershell -ArgumentList $arg
     Write-Host "[setup] launched: $file"
 }
 
-Launch "vps_update.ps1" "rdp-bot"       # server.py + auto-update
-Launch "monitor.ps1"    "rdp-monitor"   # 24h stats -> stats.html (+ Discord webhook if set)
+Launch "vps_update.ps1"    # server.py + auto-update
+Launch "monitor.ps1"       # 24h stats -> stats.html + Discord webhook graph
 
 Write-Host "== done ==" -ForegroundColor Green
 Write-Host "bot log:  $PSScriptRoot\bot.log   (errors: bot.err.log)"
