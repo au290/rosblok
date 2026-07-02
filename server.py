@@ -235,7 +235,7 @@ async def live(i: discord.Interaction, phone: str = "all"):
 dash_msgs = []   # list of Message
 
 def make_dashboard() -> discord.Embed:
-    g, up = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}, 0
+    g, up, g_srv = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}, 0, 0
     fields = []
     for p in PHONES:
         on = online(p)
@@ -246,7 +246,7 @@ def make_dashboard() -> discord.Embed:
             g[k] += su[k]
         foot = reports.get(p, {}).get("footer") or "no report yet"
         srv = reports.get(p, {}).get("servers", 0)
-        g["servers"] = g.get("servers", 0) + srv
+        g_srv += srv
         fields.append((f"{'🟢' if on else '🔴'} Phone {p}",
                        f"{foot} · 🌐 `{srv}` srv\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
     # colour reflects fleet health: all online = green, some offline = orange, all down = red
@@ -270,7 +270,7 @@ def make_dashboard() -> discord.Embed:
     e.add_field(name="💵 Est. value (StarPets floor)",
                 value=f"**≈ ${val:,.2f}**   ·   {pct}% of pets priced", inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
-                     f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   🌐 **{g.get('servers', 0)}** srv   ·   "
+                     f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   🌐 **{g_srv}** srv   ·   "
                      f"**{up}/{len(PHONES)}** phones online")
     e.set_footer(text="fleet summary · auto-updates every 30s · prices via StarPets")
     return e
