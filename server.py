@@ -315,6 +315,18 @@ def _inv_of(phone: str) -> list:
     return out
 
 
+_ANSI_RESET = "[0m"
+def _rarity_ansi(rarity: str) -> str:
+    """Discord ANSI foreground code for an Adopt Me rarity (used inside ```ansi blocks)."""
+    r = (rarity or "").lower()
+    if "legendary" in r: return "[33m"   # gold
+    if "ultra"     in r: return "[35m"   # pink  (ultra-rare)
+    if "uncommon"  in r: return "[32m"   # green
+    if "rare"      in r: return "[34m"   # blue
+    if "common"    in r: return "[30m"   # gray
+    return "[37m"                          # unknown -> white
+
+
 def _inv_summary(phone: str) -> dict:
     """Totals across the target phone(s): accounts, bucks, pets, full-grown, eggs."""
     su = {"accts": 0, "bucks": 0, "pets": 0, "fg": 0, "eggs": 0}
@@ -368,10 +380,15 @@ async def pets(i: discord.Interaction, phone: str = "all"):
         return await i.response.send_message(f"[{phone}] no pets found")
     tot   = sum(v["count"] for v in totals.values())
     totfg = sum(v["fg"] for v in totals.values())
-    rows  = [f"{v['count']:>4} {v['fg']:>4}FG  {(v['rarity'] or '?')[:9]:<9} {pid}"
-             for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])]
+    rows = []
+    for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])[:45]:
+        line = f"{v['count']:>4} {v['fg']:>4}FG  {(v['rarity'] or '?')[:9]:<9} {pid}"
+        rows.append(_rarity_ansi(v["rarity"]) + line + _ANSI_RESET)   # colour whole row by rarity
+    legend = (f"{_rarity_ansi('legendary')}Legendary {_rarity_ansi('ultra')}Ultra "
+              f"{_rarity_ansi('rare')}Rare {_rarity_ansi('uncommon')}Uncommon "
+              f"{_rarity_ansi('common')}Common{_ANSI_RESET}")
     e = discord.Embed(title=f"🐾 Pets · {phone}", color=0x2ECC71, timestamp=discord.utils.utcnow())
-    e.description = "```\ncnt   fg  rarity    pet\n" + ("\n".join(rows))[-3800:] + "\n```"
+    e.description = "```ansi\n" + legend + "\ncnt   fg  rarity    pet\n" + "\n".join(rows) + "\n```"
     e.add_field(name="🐾 Total",      value=f"{tot}", inline=True)
     e.add_field(name="🌟 Full grown", value=f"{totfg}", inline=True)
     e.add_field(name="🔖 Types",      value=f"{len(totals)}", inline=True)
