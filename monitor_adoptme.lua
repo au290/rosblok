@@ -35,23 +35,29 @@ local raritySrc = {}   -- name -> module table that may map pet kind -> rarity
 do
     local Fsys
     pcall(function() Fsys = require(RS.Fsys) end)
+    local function keep(mod) return type(mod) == "table" or type(mod) == "function" end
     if Fsys and Fsys.load then
-        for _, n in ipairs({ "PetConstants", "Pets", "PetData", "PetInfo",
-                             "PetTextInfo", "PetRegistry", "PetProducts" }) do
+        for _, n in ipairs({ "PetConstants", "Pets", "PetData", "PetInfo", "PetTextInfo",
+                             "PetRegistry", "PetProducts", "PetDisplayInfo", "PetAvatarItemDB" }) do
             local ok, mod = pcall(function() return Fsys.load(n) end)
-            if ok and type(mod) == "table" then raritySrc[n] = mod end
+            if ok and keep(mod) then raritySrc[n] = mod end
         end
     end
     -- also scan the tree for pet-ish ModuleScripts (covers builds with other names)
     for _, d in ipairs(RS:GetDescendants()) do
         if d:IsA("ModuleScript") and d.Name:lower():match("pet") and not raritySrc[d.Name] then
             local ok, mod = pcall(require, d)
-            if ok and type(mod) == "table" then raritySrc[d.Name] = mod end
+            if ok and keep(mod) then raritySrc[d.Name] = mod end
         end
     end
 end
 
-local function lookupEntry(mod, kind)
+-- get whatever a module knows about a pet kind (table modules: index it; function modules: call it)
+local function infoFor(mod, kind)
+    if type(mod) == "function" then
+        local ok, r = pcall(mod, kind)
+        return ok and r or nil
+    end
     if type(mod) ~= "table" then return nil end
     if mod[kind] ~= nil then return mod[kind] end
     for _, sub in ipairs({ "pets", "Pets", "byKind", "kinds", "data" }) do
@@ -61,14 +67,14 @@ local function lookupEntry(mod, kind)
 end
 local function entryRarity(e)
     if type(e) ~= "table" then return nil end
-    return e.rarity or e.Rarity or e.rarityName or e.rarity_name
+    return e.rarity or e.Rarity or e.rarityName or e.rarity_name or e.pet_rarity
 end
 local rarityCache = {}
 local function rarityOf(kind)
     local v = rarityCache[kind]
     if v ~= nil then return v or nil end
     for _, mod in pairs(raritySrc) do
-        local r = entryRarity(lookupEntry(mod, kind))
+        local r = entryRarity(infoFor(mod, kind))
         if r then rarityCache[kind] = tostring(r); return tostring(r) end
     end
     rarityCache[kind] = false
@@ -103,6 +109,14 @@ local function keylist(set)
     return a
 end
 
+local function firstkeys(t, n)   -- up to n top-level keys of a table (for the rarity probe)
+    local a = {}
+    if type(t) == "table" then
+        for k in pairs(t) do a[#a + 1] = tostring(k); if #a >= n then break end end
+    end
+    return a
+end
+
 local function getStats()
     local me = getMe()
     if not me then return nil end
@@ -127,17 +141,32 @@ local function getStats()
                     petCount = petCount + 1
                     if not sample then
                         sample = { top = shallow(item), properties = shallow(props) }
-                        local probe = {}   -- where does rarity live for this kind?
-                        for n, mod in pairs(raritySrc) do probe[n] = shallow(lookupEntry(mod, kind)) end
-                        sample.rarity_probe = probe
+                        -- deep-probe the promising modules: dump their shape / call result for this kind
+                        local DEEP = { Pets = 1, PetDisplayInfo = 1, PetAvatarItemDB = 1,
+                                       PetAvatarCategoriesDB = 1, PetProducts = 1, PetAppearance = 1 }
+                        local dp = {}
+                        for n, mod in pairs(raritySrc) do
+                            if DEEP[n] then
+                                local d = { type = type(mod) }
+                                if type(mod) == "table" then
+                                    d.keys = firstkeys(mod, 25)
+                                    if mod[kind] ~= nil then d.kind_entry = shallow(mod[kind]) end
+                                else
+                                    local ok, r = pcall(mod, kind)
+                                    d.call_ok = ok
+                                    if ok then d.call_result = shallow(r) end
+                                end
+                                dp[n] = d
+                            end
+                        end
+                        sample.rarity_probe = dp
                     end
                     local age  = tonumber(props.age) or 0
-                    local neon = props.neon == true or props.is_neon == true
-                    local mega = props.mega == true or props.is_mega == true
+                    local neon = props.neon == true
+                    local mega = props.mega_neon == true
                     -- fold neon/mega into the key so /pets shows them grouped separately
                     local key = kind
-                    if neon then key = key .. " (neon)" end
-                    if mega then key = key .. " (mega)" end
+                    if mega then key = key .. " (mega neon)" elseif neon then key = key .. " (neon)" end
                     local t = byType[key]
                     if not t then
                         t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega, rarity = rarityOf(kind) }
