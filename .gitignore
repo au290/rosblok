@@ -5,6 +5,12 @@
 !.gitignore
 !.gitattributes
 !master_bot.py
+!server.py
+!agent.py
 !autoupdate.sh
+!vps_update.sh
+!vps_update.ps1
+!monitor.ps1
+!setuprdp.ps1
 !setup.sh
 !monitor_adoptme.lua

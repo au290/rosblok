@@ -28,7 +28,11 @@ SESSION  = "farm"                        # tmux session name
 HOPPERS  = [1, 2, 3, 4, 5]               # this phone's hoppers
 # ───────────────────────────────────────────────────────────────────────────
 
-BASE_DIR = Path(__file__).parent.resolve()
+# Single home on shared storage, managed by hand in the file manager: this holds
+# EVERYTHING — token.txt, config.txt, hopper*.lua, cmd/, logs, link.txt, servers.txt.
+# (Hardcoded, not derived from __file__, so it works no matter where you launch from.)
+BASE_DIR = Path("/storage/emulated/0/Download")
+RUN_DIR  = BASE_DIR
 LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
 
 # token.txt (gitignored) wins over the inline TOKEN — so master_bot.py is safe to push
@@ -83,10 +87,10 @@ def ensure_window(n: int):
 def start_hopper(n: int) -> str:
     if is_running(n):
         return f"hopper{n} already running"
-    if not (BASE_DIR / f"hopper{n}.lua").exists():
-        return f"hopper{n}.lua not found"
+    if not (RUN_DIR / f"hopper{n}.lua").exists():
+        return f"hopper{n}.lua not found in {RUN_DIR}"
     ensure_window(n)
-    tmux("send-keys", "-t", tgt(n), f"cd '{BASE_DIR}' && {LUA} hopper{n}.lua", "Enter")
+    tmux("send-keys", "-t", tgt(n), f"cd '{RUN_DIR}' && {LUA} hopper{n}.lua", "Enter")
     return f"started hopper{n}"
 
 
@@ -104,15 +108,15 @@ def pane_tail(n: int, lines: int = 1) -> str:
     return "\n".join(rows[-lines:]) if rows else "—"
 
 
-# link.txt / servers.txt live in the phone's Download folder (change if you keep them elsewhere)
-DATA_DIR  = Path("/storage/emulated/0/Download")
+# link.txt / servers.txt live alongside the hoppers in RUN_DIR (the phone's Download folder)
+DATA_DIR  = RUN_DIR
 MAP_FILE  = DATA_DIR / "servers.txt"
 POOL_FILE = DATA_DIR / "link.txt"
-# Folder the in-game monitor writefile()s Adopt Me dumps into.
-# Point this at your executor's workspace, e.g. Path("/storage/emulated/0/Delta/workspace/inv")
-INV_DIR   = BASE_DIR / "inv"
+# Folder the in-game monitor writefile()s Adopt Me dumps into — Delta's own workspace,
+# NOT a Termux-side folder (Delta is a separate app; it can't see into Termux's sandbox).
+INV_DIR   = Path("/storage/emulated/0/Delta/Workspace/inv")
 # Delta executor autoexec folder — scripts placed here run on injection. Edit if yours differs.
-AUTOEXEC  = Path("/storage/emulated/0/Delta/autoexec")
+AUTOEXEC  = Path("/storage/emulated/0/Delta/Autoexecute")
 
 
 def pool() -> list:
@@ -145,13 +149,13 @@ def hopper_links(n: int) -> list:
 
 
 def write_cmd(n: int, c: str):
-    d = BASE_DIR / "cmd"
-    d.mkdir(exist_ok=True)
+    d = RUN_DIR / "cmd"
+    d.mkdir(parents=True, exist_ok=True)
     (d / f"h{n}.txt").write_text(c)
 
 
 def clear_cmd(n: int):
-    f = BASE_DIR / "cmd" / f"h{n}.txt"
+    f = RUN_DIR / "cmd" / f"h{n}.txt"
     if f.exists():
         f.unlink()
 
@@ -469,7 +473,10 @@ async def logs(i: discord.Interaction, n: int, lines: int = 15):
 
 @bot.tree.command(name="help", description="List every command")
 async def help_cmd(i: discord.Interaction):
-    rows = [f"/{c.name} — {c.description}" for c in sorted(bot.tree.get_commands(), key=lambda c: c.name)]
+    # on_ready moves live commands to the guild scope and clears the global store
+    # (to kill duplicates) — so look them up under the same scope, not guild=None.
+    guild = discord.Object(id=GUILD_ID) if GUILD_ID else None
+    rows = [f"/{c.name} — {c.description}" for c in sorted(bot.tree.get_commands(guild=guild), key=lambda c: c.name)]
     await i.response.send_message(f"[{PHONE}] commands:\n```\n" + "\n".join(rows)[-1900:] + "\n```")
 
 
