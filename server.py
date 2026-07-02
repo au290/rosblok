@@ -259,10 +259,12 @@ async def continue_(i: discord.Interaction, phone: str = "all"):
 
 # ── inventory (computed from the phone's reported inv blob) ──
 def _inv_of(phone: str) -> list:
-    """All reported account blobs across the target phone(s)."""
+    """All reported account blobs across the target phone(s) (skip empty/nameless)."""
     out = []
     for p in targets(phone):
-        out.extend((reports.get(p, {}).get("inv") or {}).values())
+        for b in (reports.get(p, {}).get("inv") or {}).values():
+            if isinstance(b, dict) and b.get("player") and b.get("player") != "?":
+                out.append(b)
     return out
 
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")

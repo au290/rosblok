@@ -133,8 +133,10 @@ local function getStats()
                 local kind  = tostring(item.kind or item.id or "?")   -- kind = pet TYPE (groups correctly)
                 for k in pairs(item)  do topKeys[tostring(k)]  = true end   -- collect the field vocabulary
                 for k in pairs(props) do propKeys[tostring(k)] = true end   -- (reveals a neon field if any pet has one)
-                local cat = tostring(item.category or "")
-                if (cat ~= "pets" and cat:lower():match("egg")) or (cat == "" and kind:match("egg$")) then
+                local cat = tostring(item.category or ""):lower()
+                -- unhatched egg: kind ends in "egg" (cracked_egg, royal_egg…); hatched pets
+                -- end in the pet name (basic_egg_2022_alicorn) so they DON'T match
+                if kind:match("egg$") or cat == "egg" or cat == "eggs" then
                     eggCount = eggCount + 1
                     eggsByType[kind] = (eggsByType[kind] or 0) + 1
                 else
