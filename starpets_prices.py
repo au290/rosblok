@@ -4,11 +4,18 @@ Usage:  python starpets_prices.py <name>
 Example: python starpets_prices.py unicorn
 """
 import sys
+import ssl
 import json
 import urllib.request
 
 URL = "https://market.apineural.com/api/v2/store/items/all"
 TYPES = ["transport", "pet", "egg", "potion", "stroller", "toy", "petwear", "gift"]
+
+# some hosts (VPS) do TLS interception with a self-signed CA Python won't trust;
+# this is a public price API, so skip verification.
+_CTX = ssl.create_default_context()
+_CTX.check_hostname = False
+_CTX.verify_mode = ssl.CERT_NONE
 
 
 def search(name, currency="usd", amount=50):
@@ -26,7 +33,7 @@ def search(name, currency="usd", amount=50):
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
     })
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=30, context=_CTX) as r:
         return json.load(r)
 
 

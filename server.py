@@ -12,6 +12,7 @@ Config: edit the CONFIG block, or use token.txt (Discord token) + config.txt
 """
 
 import re
+import ssl
 import time
 import json
 import uuid
@@ -393,6 +394,11 @@ _SP_HEADERS = {
 }
 PRICES_FILE = BASE_DIR / "prices.json"          # cache: "realName|pumping" -> USD floor
 PRICES = {}
+# some VPS hosts do TLS interception (self-signed CA) that Python's CA bundle doesn't
+# trust; the price API is public/no-auth, so skip verification for these calls only.
+_SP_CTX = ssl.create_default_context()
+_SP_CTX.check_hostname = False
+_SP_CTX.verify_mode = ssl.CERT_NONE
 if PRICES_FILE.exists():
     try: PRICES = json.loads(PRICES_FILE.read_text())
     except Exception: PRICES = {}
@@ -423,7 +429,7 @@ def _sp_floor(real_name: str, pumping: str):
     for _ in range(3):                                  # the API 400s intermittently
         try:
             req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=30, context=_SP_CTX) as r:
                 items = json.load(r).get("items", [])
             break
         except Exception:
