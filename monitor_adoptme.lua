@@ -37,6 +37,18 @@ local function getMe()
     return all[LP.Name]
 end
 
+-- shallow, JSON-safe copy of a table (one level, values stringified) — used to
+-- dump one raw pet so we can see the real field names for neon/age/rarity.
+local function shallow(t)
+    local o = {}
+    if type(t) == "table" then
+        for k, v in pairs(t) do
+            o[tostring(k)] = (type(v) == "table") and "{table}" or tostring(v)
+        end
+    end
+    return o
+end
+
 local function getStats()
     local me = getMe()
     if not me then return nil end
@@ -44,26 +56,40 @@ local function getStats()
 
     local petCount, eggCount = 0, 0
     local byType, eggsByType = {}, {}
+    local sample
     local pets = me.inventory and me.inventory.pets
     if type(pets) == "table" then
         for _, item in pairs(pets) do
             if type(item) == "table" then
-                local id = tostring(item.id or item.kind or "?")
-                if id:match("egg$") then
+                local props = item.properties or {}
+                local kind  = tostring(item.kind or item.id or "?")   -- kind = pet TYPE (groups correctly)
+                if kind:match("egg$") or item.category == "egg" then
                     eggCount = eggCount + 1
-                    eggsByType[id] = (eggsByType[id] or 0) + 1
+                    eggsByType[kind] = (eggsByType[kind] or 0) + 1
                 else
                     petCount = petCount + 1
-                    local age = tonumber((item.properties or {}).age) or 0
-                    local t = byType[id]
-                    if not t then t = { count = 0, max_age = 0 }; byType[id] = t end
+                    if not sample then
+                        sample = { top = shallow(item), properties = shallow(props) }  -- one raw pet, for calibration
+                    end
+                    local age  = tonumber(props.age) or 0
+                    local neon = props.neon == true
+                    local mega = props.mega == true
+                    -- fold neon/mega into the key so /pets shows them grouped separately
+                    local key = kind
+                    if neon then key = key .. " (neon)" end
+                    if mega then key = key .. " (mega)" end
+                    local t = byType[key]
+                    if not t then
+                        t = { count = 0, max_age = 0, kind = kind, neon = neon, mega = mega }
+                        byType[key] = t
+                    end
                     t.count = t.count + 1
                     if age > t.max_age then t.max_age = age end
                 end
             end
         end
     end
-    return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType }
+    return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType, sample = sample }
 end
 
 -- ── Dump to file ───────────────────────────────────────────────────
@@ -78,6 +104,10 @@ local function dump()
             stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs },
             pets   = pets,
         }))
+        -- one-time: dump a raw pet's fields so we can calibrate neon/age/rarity
+        if pets.sample then
+            writefile("inv/_sample.json", HttpService:JSONEncode(pets.sample))
+        end
     end)
     print(string.format("[monitor] %s | bucks:%d pets:%d eggs:%d", LP.Name, money, pets.count, pets.eggs))
 end
