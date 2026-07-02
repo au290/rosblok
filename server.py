@@ -52,7 +52,7 @@ if _cfg.exists():
 # ─────────────────────────── per-phone state ───────────────────────────
 jobs    = {p: [] for p in PHONES}                                    # pending jobs per phone
 futures = {}                                                         # job_id -> Future (awaiting result)
-reports = {p: {"board": "", "footer": "", "inv": {}, "ts": 0.0} for p in PHONES}
+reports = {p: {"board": "", "footer": "", "inv": {}, "servers": 0, "ts": 0.0} for p in PHONES}
 
 
 def targets(phone: str) -> list:
@@ -109,6 +109,8 @@ async def handle_poll(req: web.Request):
         rep["footer"] = body.get("footer", rep["footer"])
     if "inv" in body:
         rep["inv"] = body.get("inv", rep["inv"])
+    if "servers" in body:
+        rep["servers"] = body.get("servers", rep.get("servers", 0))
     rep["ts"] = time.time()
     for r in body.get("results", []):
         fut = futures.pop(r.get("id"), None)
@@ -243,8 +245,10 @@ def make_dashboard() -> discord.Embed:
         for k in g:
             g[k] += su[k]
         foot = reports.get(p, {}).get("footer") or "no report yet"
+        srv = reports.get(p, {}).get("servers", 0)
+        g["servers"] = g.get("servers", 0) + srv
         fields.append((f"{'🟢' if on else '🔴'} Phone {p}",
-                       f"{foot}\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
+                       f"{foot} · 🌐 `{srv}` srv\n`{su['accts']}` acct · `{su['bucks']:,}`💰 · `{su['pets']}`🐾 ({su['fg']} FG) · {su['eggs']}🥚"))
     # colour reflects fleet health: all online = green, some offline = orange, all down = red
     if   up == len(PHONES): color = 0x2ECC71
     elif up == 0:           color = 0xE74C3C
@@ -266,7 +270,8 @@ def make_dashboard() -> discord.Embed:
     e.add_field(name="💵 Est. value (StarPets floor)",
                 value=f"**≈ ${val:,.2f}**   ·   {pct}% of pets priced", inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
-                     f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   **{up}/{len(PHONES)}** phones online")
+                     f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   🌐 **{g.get('servers', 0)}** srv   ·   "
+                     f"**{up}/{len(PHONES)}** phones online")
     e.set_footer(text="fleet summary · auto-updates every 30s · prices via StarPets")
     return e
 
@@ -439,16 +444,19 @@ def _est_value(phone: str):
     return total, priced, unpriced
 
 
-@tasks.loop(minutes=30)
+@tasks.loop(minutes=5)
 async def price_refresh():
-    """Fetch StarPets floors for any pet kinds we don't have cached yet."""
+    """Fetch StarPets floors for any pet kinds we don't have cached yet (cheap: skips cached)."""
     changed = False
     for key in list(_pets_totals("all").keys()):
         rn, pump = _key_variant(key)
         pk = f"{rn}|{pump}"
         if pk in PRICES:
             continue
-        price = await asyncio.to_thread(_sp_floor, rn, pump)
+        try:
+            price = await asyncio.to_thread(_sp_floor, rn, pump)
+        except Exception:
+            price = None
         if price is not None:
             PRICES[pk] = price; changed = True
         await asyncio.sleep(1)                  # be gentle on the API
