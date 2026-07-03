@@ -460,6 +460,10 @@ async def inv(i: discord.Interaction, phone: str = "all"):
 async def pricelog(i: discord.Interaction, phone: str = "A"):
     await job_reply(i, phone, "pricelog", code=True)
 
+@bot.tree.command(description="Force phones to re-fetch StarPets prices now (they refresh hourly anyway)")
+async def refetch(i: discord.Interaction, phone: str = "all"):
+    await job_reply(i, phone, "refetch")
+
 @bot.tree.command(description="Inventory value breakdown: count × StarPets floor per pet")
 async def value(i: discord.Interaction, phone: str = "all"):
     prices = _all_prices()

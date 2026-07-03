@@ -279,6 +279,9 @@ PRICES_FILE = RUN_DIR / "prices.json"
 PRICES = {}
 RARITIES = {}          # realName -> rarity (from StarPets), sent to the VPS for /pets colors
 PRICE_LOG = []         # recent price-worker log lines, surfaced by /pricelog
+PRICE_TS = {}          # pk -> last fetch time (in-memory; empty on restart => refetch all)
+PRICE_TTL = 3600       # re-fetch each price at most once per hour
+INTERVAL_PRICE = 120   # price-worker scan cadence (new pets + /refetch land within this)
 if PRICES_FILE.exists():
     try:
         PRICES = json.loads(PRICES_FILE.read_text())
@@ -342,13 +345,17 @@ def price_worker():
             for d in read_inv().values():
                 if isinstance(d, dict):
                     keys.update((d.get("pets") or {}).get("by_type") or {})
-            todo = [k for k in keys if f"{_key_variant(k)[0]}|{_key_variant(k)[1]}" not in PRICES]
-            _plog(f"scan: {len(keys)} pet kinds, {len(todo)} to fetch, {len(PRICES)} cached")
+            now = time.time()
+            # (re)fetch anything uncached OR older than the TTL
+            todo = [k for k in keys
+                    if now - PRICE_TS.get(f"{_key_variant(k)[0]}|{_key_variant(k)[1]}", 0) > PRICE_TTL]
+            _plog(f"scan: {len(keys)} pet kinds, {len(todo)} to (re)fetch, {len(PRICES)} cached")
             ok, changed = 0, False
             for key in todo:
                 rn, pump = _key_variant(key)
                 pk = f"{rn}|{pump}"
                 price, rarity = _sp_floor(rn, pump)
+                PRICE_TS[pk] = time.time()              # mark attempted (success or fail) so it respects TTL
                 if price is not None:
                     PRICES[pk] = price; ok += 1; changed = True
                     if rarity:
@@ -363,7 +370,7 @@ def price_worker():
             _plog(f"done: {ok}/{len(todo)} priced, {len(PRICES)} total")
         except Exception as e:
             _plog(f"worker error: {e}")
-        time.sleep(300)                                 # rescan for new pets every 5 min
+        time.sleep(INTERVAL_PRICE)                      # rescan (new pets + TTL refresh + /refetch)
 
 
 # ─────────────────────────── job dispatch ───────────────────────────
@@ -375,6 +382,9 @@ def dispatch(cmd: str) -> str:
     if v == "pricelog":
         return (f"prices cached: {len(PRICES)} · rarities: {len(RARITIES)}\n"
                 + ("\n".join(PRICE_LOG[-24:]) or "(no price activity yet)"))
+    if v == "refetch":
+        PRICE_TS.clear()                                 # mark all stale -> next scan re-fetches
+        return f"marked {len(PRICES)} prices stale — re-fetching within {INTERVAL_PRICE}s"
     if v == "start":     return start_hopper(int(a[0]))
     if v == "stop":      return stop_hopper(int(a[0]))
     if v == "restart":   stop_hopper(int(a[0])); return start_hopper(int(a[0]))
