@@ -345,22 +345,24 @@ def price_worker():
             for d in read_inv().values():
                 if isinstance(d, dict):
                     keys.update((d.get("pets") or {}).get("by_type") or {})
+            # value rule (4 neons = 1 mega): normals priced at default, neon+mega at mega_neon
+            need = set()
+            for k in keys:
+                rn, pump = _key_variant(k)
+                need.add((rn, "default" if pump == "default" else "mega_neon"))
             now = time.time()
-            # (re)fetch anything uncached OR older than the TTL
-            todo = [k for k in keys
-                    if now - PRICE_TS.get(f"{_key_variant(k)[0]}|{_key_variant(k)[1]}", 0) > PRICE_TTL]
-            _plog(f"scan: {len(keys)} pet kinds, {len(todo)} to (re)fetch, {len(PRICES)} cached")
+            todo = [(rn, vv) for rn, vv in need if now - PRICE_TS.get(f"{rn}|{vv}", 0) > PRICE_TTL]
+            _plog(f"scan: {len(keys)} kinds, {len(need)} price-keys, {len(todo)} to (re)fetch, {len(PRICES)} cached")
             ok, changed = 0, False
-            for key in todo:
-                rn, pump = _key_variant(key)
-                pk = f"{rn}|{pump}"
-                price, rarity = _sp_floor(rn, pump)
+            for rn, vv in todo:
+                pk = f"{rn}|{vv}"
+                price, rarity = _sp_floor(rn, vv)
                 PRICE_TS[pk] = time.time()              # mark attempted (success or fail) so it respects TTL
                 if price is not None:
                     PRICES[pk] = price; ok += 1; changed = True
                     if rarity:
                         RARITIES[rn] = rarity
-                    _plog(f"{rn}|{pump} = ${price} ({rarity})")
+                    _plog(f"{pk} = ${price} ({rarity})")
                 time.sleep(1)                           # be gentle on the API
             if changed:
                 try:

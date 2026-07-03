@@ -425,19 +425,29 @@ def _display_name(kind: str) -> str:
     return base.replace("_", " ").title()
 
 
+def _group_value(rn: str, pump: str, count: int, prices: dict):
+    """Value a pet group. Rule: 4 neons = 1 mega.
+       normal → count × default ; neon → (count/4) × mega ; mega → count × mega.
+       Returns (value, unit_price, qty, priced?)."""
+    if pump == "default":
+        p = prices.get(f"{rn}|default")
+        return ((p or 0) * count, p, count, p is not None)
+    p = prices.get(f"{rn}|mega_neon")                    # neon + mega both priced at mega
+    qty = count / 4 if pump == "neon" else count
+    return ((p or 0) * qty, p, qty, p is not None)
+
+
 def _est_value(phone: str):
     """(total USD, priced pet count, unpriced pet count) from phone-reported StarPets floors."""
     prices = _all_prices()
     total, priced, unpriced = 0.0, 0, 0
     for key, v in _pets_totals(phone).items():
         rn, pump = _key_variant(key)
-        p = prices.get(f"{rn}|{pump}")
-        if p is None and pump != "default":
-            p = prices.get(f"{rn}|default")     # fall back to base variant price
-        if p is None:
-            unpriced += v["count"]
+        val, _p, _q, ok = _group_value(rn, pump, v["count"], prices)
+        if ok:
+            total += val; priced += v["count"]
         else:
-            total += p * v["count"]; priced += v["count"]
+            unpriced += v["count"]
     return total, priced, unpriced
 
 @bot.tree.command(description="Each account's Adopt Me inventory (bucks/pets/eggs)")
@@ -474,13 +484,13 @@ async def value(i: discord.Interaction, phone: str = "all"):
     rows, grand = [], 0.0
     for key, v in _pets_totals(phone).items():
         rn, pump = _key_variant(key)
-        p = prices.get(f"{rn}|{pump}") or prices.get(f"{rn}|default")
-        if not p:
+        line, p, qty, ok = _group_value(rn, pump, v["count"], prices)
+        if not ok:
             continue
-        line = p * v["count"]
         grand += line
         tag = "" if pump == "default" else f" ({pump.replace('_', ' ')})"   # neon / mega neon
-        rows.append((line, f"{v['count']:>4} x ${p:<5} = ${line:>8,.2f}  {_display_name(rn)}{tag}"))
+        qtystr = f"{v['count']}/4" if pump == "neon" else f"{v['count']}"    # neon counts as /4 (=mega)
+        rows.append((line, f"{qtystr:>7} x ${p:<5} = ${line:>8,.2f}  {_display_name(rn)}{tag}"))
     if not rows:
         return await i.response.send_message(f"[{phone}] no priced pets yet")
     rows.sort(reverse=True)
