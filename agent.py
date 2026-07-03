@@ -403,6 +403,12 @@ def dispatch(cmd: str) -> str:
             return f"hopper{n} has no RF{srv} (has RF1..RF{len(lst)})"
         write_cmd(n, f"pin {lst[srv - 1]}")             # jump there AND hold (like a targeted all_goto)
         return f"hopper{n} pinned to RF{srv}, holding (/continue to release)"
+    if v == "pin":                                       # paste a link -> pin ONE hopper (link not saved)
+        write_cmd(int(a[0]), f"pin {a[1].strip()}")
+        return f"hopper{a[0]} pinned to that link, holding (/unpin {a[0]} or /continue; link not saved)"
+    if v == "unpin":
+        clear_cmd(int(a[0]))
+        return f"hopper{a[0]} released, resuming rotation"
     if v == "all_goto":
         for n in HOPPERS: write_cmd(n, f"pin {a[0].strip()}")
         return "all hoppers pinned, holding (/continue to resume)"

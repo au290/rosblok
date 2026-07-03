@@ -334,6 +334,14 @@ async def link_add(i: discord.Interaction, url: str, phone: str = "all"):
 async def all_goto(i: discord.Interaction, url: str, phone: str = "all"):
     await job_reply(i, phone, f"all_goto {shlex.quote(url)}")
 
+@bot.tree.command(description="Pin ONE hopper to a pasted PS link and hold (link not saved)")
+async def pin(i: discord.Interaction, n: int, url: str, phone: str = "all"):
+    await job_reply(i, phone, f"pin {n} {shlex.quote(url)}")
+
+@bot.tree.command(description="Release ONE pinned hopper back to rotation")
+async def unpin(i: discord.Interaction, n: int, phone: str = "all"):
+    await job_reply(i, phone, f"unpin {n}")
+
 @bot.tree.command(name="continue", description="Resume ALL hoppers' rotation")
 async def continue_(i: discord.Interaction, phone: str = "all"):
     await job_reply(i, phone, "continue")
