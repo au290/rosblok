@@ -36,6 +36,9 @@ INTERVAL = 2                            # seconds between polls
 BASE_DIR = Path("/storage/emulated/0/Download")
 RUN_DIR  = BASE_DIR
 LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
+# a running hopper spends most of its time in os.execute("sleep 3") / am / su (not lua), so the
+# pane's current command is usually one of these — count them all as "running" (idle = bash).
+RUNNING_CMDS = LUA_CMDS | {"sleep", "am", "su"}
 # Delta executor paths (its own app storage — not the Termux sandbox).
 INV_DIR  = Path("/storage/emulated/0/Delta/Workspace/inv")
 AUTOEXEC = Path("/storage/emulated/0/Delta/Autoexecute")
@@ -81,7 +84,7 @@ def is_running(n: int) -> bool:
     if f"h{n}" not in windows():
         return False
     r = tmux("display-message", "-p", "-t", tgt(n), "#{pane_current_command}")
-    return r.stdout.strip() in LUA_CMDS
+    return r.stdout.strip() in RUNNING_CMDS   # lua OR its sleep/am/su children (idle window = bash)
 
 
 def ensure_window(n: int):

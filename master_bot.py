@@ -34,6 +34,8 @@ HOPPERS  = [1, 2, 3, 4, 5]               # this phone's hoppers
 BASE_DIR = Path("/storage/emulated/0/Download")
 RUN_DIR  = BASE_DIR
 LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
+# a running hopper is usually in os.execute("sleep 3") / am / su, not lua — count those as running
+RUNNING_CMDS = LUA_CMDS | {"sleep", "am", "su"}
 
 # token.txt (gitignored) wins over the inline TOKEN — so master_bot.py is safe to push
 _tok = BASE_DIR / "token.txt"
@@ -74,7 +76,7 @@ def is_running(n: int) -> bool:
     if f"h{n}" not in windows():
         return False
     r = tmux("display-message", "-p", "-t", tgt(n), "#{pane_current_command}")
-    return r.stdout.strip() in LUA_CMDS
+    return r.stdout.strip() in RUNNING_CMDS   # lua OR its sleep/am/su children (idle window = bash)
 
 
 def ensure_window(n: int):
