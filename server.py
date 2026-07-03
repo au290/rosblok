@@ -429,9 +429,10 @@ def _display_name(kind: str) -> str:
 TAX = 0.75      # StarPets takes ~25%, so realised value is 75% of the listing
 
 def _group_value(rn: str, pump: str, count: int, prices: dict):
-    """Value a pet group. Rule: 4 neons = 1 mega, then -25% StarPets tax, floored to 2dp.
-       normal → count × default ; neon → (count/4) × mega ; mega → count × mega.
-       Returns (value, unit_price, qty, priced?)."""
+    """Value a pet group. Rule: 4 neons = 1 mega.  The -25% tax is applied to the UNIT
+       price (each pet sells individually, floored to the cent), then × qty.
+       normal → default ; neon → (count/4) × mega ; mega → mega.
+       Returns (value, taxed_unit_price, qty, priced?)."""
     if pump == "default":
         p, qty = prices.get(f"{rn}|default"), count
     else:
@@ -439,8 +440,9 @@ def _group_value(rn: str, pump: str, count: int, prices: dict):
         qty = count / 4 if pump == "neon" else count
     if p is None:
         return (0.0, p, qty, False)
-    val = math.floor(p * qty * TAX * 100 + 1e-6) / 100  # -25% tax, round DOWN to 2 decimals (eps: FP)
-    return (val, p, qty, True)
+    unit = math.floor(p * TAX * 100 + 1e-6) / 100       # taxed unit price, floored to 2dp
+    val  = math.floor(unit * qty * 100 + 1e-6) / 100    # line total, floored to 2dp
+    return (val, unit, qty, True)
 
 
 def _est_value(phone: str):
@@ -505,7 +507,7 @@ async def value(i: discord.Interaction, phone: str = "all"):
     e.description = f"```\n{body}\n```"
     e.add_field(name="Grand total", value=f"**${grand:,.2f}**", inline=True)
     e.add_field(name="Pet types",   value=f"{len(rows)}", inline=True)
-    e.set_footer(text="line = qty × unit − 25% StarPets tax, rounded down · neon counts as /4 (=mega)")
+    e.set_footer(text="unit = StarPets floor − 25% tax (rounded down) · line = qty × unit · neon = count/4 (=mega)")
     await i.response.send_message(embed=e)
 
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
