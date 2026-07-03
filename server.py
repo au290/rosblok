@@ -460,6 +460,29 @@ async def inv(i: discord.Interaction, phone: str = "all"):
 async def pricelog(i: discord.Interaction, phone: str = "A"):
     await job_reply(i, phone, "pricelog", code=True)
 
+@bot.tree.command(description="Inventory value breakdown: count × StarPets floor per pet")
+async def value(i: discord.Interaction, phone: str = "all"):
+    prices = _all_prices()
+    rows, grand = [], 0.0
+    for key, v in _pets_totals(phone).items():
+        rn, pump = _key_variant(key)
+        p = prices.get(f"{rn}|{pump}") or prices.get(f"{rn}|default")
+        if not p:
+            continue
+        line = p * v["count"]
+        grand += line
+        tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+        rows.append((line, f"{v['count']:>4} x ${p:<5} = ${line:>8,.2f}  {_display_name(rn)}{tag}"))
+    if not rows:
+        return await i.response.send_message(f"[{phone}] no priced pets yet")
+    rows.sort(reverse=True)
+    body = "cnt  unit      line      pet\n" + "\n".join(r[1] for r in rows[:35])
+    e = discord.Embed(title=f"💵 Value breakdown · {phone}", color=0xF1C40F, timestamp=discord.utils.utcnow())
+    e.description = f"```\n{body}\n```"
+    e.add_field(name="Grand total", value=f"**${grand:,.2f}**", inline=True)
+    e.add_field(name="Pet types",   value=f"{len(rows)}", inline=True)
+    await i.response.send_message(embed=e)
+
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
 async def pets(i: discord.Interaction, phone: str = "all"):
     data = _inv_of(phone)
