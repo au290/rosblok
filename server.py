@@ -267,9 +267,9 @@ def make_dashboard() -> discord.Embed:
         rar = _all_rarities()
         lines = []
         for pid, v in top:
-            rn = _key_variant(pid)[0]
-            rarity = rar.get(rn) or v.get("rarity") or ""
-            tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+            rn, pump = _key_variant(pid)
+            rarity = rar.get(rn, "")
+            tag = "" if pump == "default" else f" ({pump.replace('_', ' ')})"
             lines.append(f"{_rarity_ansi(rarity)}{v['count']:>4} {v['fg']:>3}FG  {_display_name(rn)}{tag}{_ANSI_RESET}")
         e.add_field(name="🔝 Top pets (fleet)", value="```ansi\n" + "\n".join(lines)[:990] + "\n```",
                     inline=False)
@@ -479,7 +479,7 @@ async def value(i: discord.Interaction, phone: str = "all"):
             continue
         line = p * v["count"]
         grand += line
-        tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+        tag = "" if pump == "default" else f" ({pump.replace('_', ' ')})"   # neon / mega neon
         rows.append((line, f"{v['count']:>4} x ${p:<5} = ${line:>8,.2f}  {_display_name(rn)}{tag}"))
     if not rows:
         return await i.response.send_message(f"[{phone}] no priced pets yet")
@@ -504,9 +504,9 @@ async def pets(i: discord.Interaction, phone: str = "all"):
     totfg = sum(v["fg"] for v in totals.values())
     rows = []
     for pid, v in sorted(totals.items(), key=lambda kv: -kv[1]["count"])[:40]:
-        rn = _key_variant(pid)[0]
-        rarity = rar.get(rn) or v.get("rarity") or ""
-        tag = " (neon)" if v.get("neon") else (" (mega)" if v.get("mega") else "")
+        rn, pump = _key_variant(pid)
+        rarity = rar.get(rn, "")
+        tag = "" if pump == "default" else f" ({pump.replace('_', ' ')})"
         line = f"{v['count']:>4} {v['fg']:>4}FG  {_display_name(rn)}{tag}"
         rows.append(_rarity_ansi(rarity) + line + _ANSI_RESET)   # colour whole row by rarity
     legend = (f"{_rarity_ansi('legendary')}Legendary {_rarity_ansi('ultra')}Ultra "
