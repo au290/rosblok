@@ -307,6 +307,10 @@ async def dashboard(i: discord.Interaction):
 async def goto(i: discord.Interaction, n: int, server: int, phone: str = "all"):
     await job_reply(i, phone, f"goto {n} {server}")
 
+@bot.tree.command(description="Send a hopper to RF<server> and HOLD there (goto + pin)")
+async def goto_pin(i: discord.Interaction, n: int, server: int, phone: str = "all"):
+    await job_reply(i, phone, f"goto_pin {n} {server}")
+
 @bot.tree.command(description="Assign hopper n to link.txt lines <first>-<last>")
 async def assign(i: discord.Interaction, n: int, first: int, last: int, phone: str = "all"):
     await job_reply(i, phone, f"assign {n} {first} {last}")

@@ -391,6 +391,13 @@ def dispatch(cmd: str) -> str:
     if v == "startall":  return "\n".join(start_hopper(n) for n in HOPPERS)
     if v == "stopall":   tmux("kill-session", "-t", SESSION); return f"killed session '{SESSION}'"
     if v == "goto":      write_cmd(int(a[0]), f"goto{a[1]}"); return f"hopper{a[0]} → RF{a[1]}"
+    if v == "goto_pin":
+        n, srv = int(a[0]), int(a[1])
+        lst = hopper_links(n)
+        if not (1 <= srv <= len(lst)):
+            return f"hopper{n} has no RF{srv} (has RF1..RF{len(lst)})"
+        write_cmd(n, f"pin {lst[srv - 1]}")             # jump there AND hold (like a targeted all_goto)
+        return f"hopper{n} pinned to RF{srv}, holding (/continue to release)"
     if v == "all_goto":
         for n in HOPPERS: write_cmd(n, f"pin {a[0].strip()}")
         return "all hoppers pinned, holding (/continue to resume)"
