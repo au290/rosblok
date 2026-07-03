@@ -12,6 +12,7 @@ Config: edit the CONFIG block, or use token.txt (Discord token) + config.txt
 """
 
 import re
+import math
 import time
 import json
 import uuid
@@ -276,7 +277,7 @@ def make_dashboard() -> discord.Embed:
     val, priced, unpriced = _est_value("all")
     tot = priced + unpriced
     pct = int(100 * priced / tot) if tot else 0
-    e.add_field(name="💵 Est. value (StarPets floor)",
+    e.add_field(name="💵 Est. value (StarPets −25% tax)",
                 value=f"**≈ ${val:,.2f}**   ·   {pct}% of pets priced", inline=False)
     e.description = (f"**{g['bucks']:,}** 💰   ·   **{g['pets']}** 🐾 ({g['fg']} FG)   ·   "
                      f"{g['eggs']} 🥚   ·   {g['accts']} acct   ·   🌐 **{g_srv}** srv   ·   "
@@ -425,16 +426,21 @@ def _display_name(kind: str) -> str:
     return base.replace("_", " ").title()
 
 
+TAX = 0.75      # StarPets takes ~25%, so realised value is 75% of the listing
+
 def _group_value(rn: str, pump: str, count: int, prices: dict):
-    """Value a pet group. Rule: 4 neons = 1 mega.
+    """Value a pet group. Rule: 4 neons = 1 mega, then -25% StarPets tax, floored to 2dp.
        normal → count × default ; neon → (count/4) × mega ; mega → count × mega.
        Returns (value, unit_price, qty, priced?)."""
     if pump == "default":
-        p = prices.get(f"{rn}|default")
-        return ((p or 0) * count, p, count, p is not None)
-    p = prices.get(f"{rn}|mega_neon")                    # neon + mega both priced at mega
-    qty = count / 4 if pump == "neon" else count
-    return ((p or 0) * qty, p, qty, p is not None)
+        p, qty = prices.get(f"{rn}|default"), count
+    else:
+        p = prices.get(f"{rn}|mega_neon")               # neon + mega both priced at mega
+        qty = count / 4 if pump == "neon" else count
+    if p is None:
+        return (0.0, p, qty, False)
+    val = math.floor(p * qty * TAX * 100 + 1e-6) / 100  # -25% tax, round DOWN to 2 decimals (eps: FP)
+    return (val, p, qty, True)
 
 
 def _est_value(phone: str):
@@ -499,6 +505,7 @@ async def value(i: discord.Interaction, phone: str = "all"):
     e.description = f"```\n{body}\n```"
     e.add_field(name="Grand total", value=f"**${grand:,.2f}**", inline=True)
     e.add_field(name="Pet types",   value=f"{len(rows)}", inline=True)
+    e.set_footer(text="line = qty × unit − 25% StarPets tax, rounded down · neon counts as /4 (=mega)")
     await i.response.send_message(embed=e)
 
 @bot.tree.command(description="All pets across every account: count + full-grown, most-owned first")
