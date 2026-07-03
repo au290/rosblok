@@ -17,10 +17,12 @@ if (-not $Py) { Write-Error "python not found in PATH"; exit 1 }
 $script:proc = $null
 
 function Restart-Bot {
-    if ($script:proc -and -not $script:proc.HasExited) {
-        Stop-Process -Id $script:proc.Id -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
-    }
+    # kill EVERY python running our entry file (not just the one we started), so
+    # restarts never accumulate duplicate bots that thrash Discord's gateway
+    Get-CimInstance Win32_Process -Filter "name='python.exe'" |
+        Where-Object { $_.CommandLine -match [regex]::Escape($Entry) } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 1
     $script:proc = Start-Process -FilePath $Py -ArgumentList $Entry `
         -RedirectStandardOutput "bot.log" -RedirectStandardError "bot.err.log" `
         -NoNewWindow -PassThru
