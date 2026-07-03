@@ -26,8 +26,13 @@ termux-setup-storage 2>/dev/null || true
 mkdir -p "$DIR/cmd"
 cd "$DIR"
 
-printf "[setup] mode - 'agent' (VPS) or 'master' (standalone) [agent]: "
-read -r MODE </dev/tty; [ -z "$MODE" ] && MODE=agent
+if [ -f config.txt ]; then                        # re-run (e.g. after reboot): infer mode, no prompts
+    grep -q '^VPS_URL=' config.txt && MODE=agent || MODE=master
+    echo "[setup] existing config.txt found -> $MODE mode (no prompts)"
+else
+    printf "[setup] mode - 'agent' (VPS) or 'master' (standalone) [agent]: "
+    read -r MODE </dev/tty; [ -z "$MODE" ] && MODE=agent
+fi
 
 if [ "$MODE" = "master" ]; then
     ENTRY=master_bot.py
@@ -37,18 +42,22 @@ if [ "$MODE" = "master" ]; then
         printf "[setup] Discord bot token: "; read -r T </dev/tty
         printf '%s\n' "$T" > token.txt
     fi
-    printf "[setup] server (guild) ID: ";     read -r GID </dev/tty
-    printf "[setup] phone label [A]: ";       read -r PH  </dev/tty; [ -z "$PH" ] && PH=A
-    printf "[setup] hoppers [1,2,3,4,5]: ";    read -r HP  </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
-    { echo "GUILD_ID=$GID"; echo "PHONE=$PH"; echo "HOPPERS=$HP"; } > config.txt
+    if [ ! -f config.txt ]; then                  # keep existing config on re-run (e.g. after reboot)
+        printf "[setup] server (guild) ID: ";     read -r GID </dev/tty
+        printf "[setup] phone label [A]: ";       read -r PH  </dev/tty; [ -z "$PH" ] && PH=A
+        printf "[setup] hoppers [1,2,3,4,5]: ";    read -r HP  </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
+        { echo "GUILD_ID=$GID"; echo "PHONE=$PH"; echo "HOPPERS=$HP"; } > config.txt
+    fi
 else
     ENTRY=agent.py
     dl "$RAW/$ENTRY" "$ENTRY"                     # agent needs no pip deps (stdlib only)
-    printf "[setup] VPS URL [https://api.kqing.web.id]: "; read -r VU </dev/tty; [ -z "$VU" ] && VU=https://api.kqing.web.id
-    printf "[setup] shared KEY: ";                read -r KY </dev/tty
-    printf "[setup] phone label [A]: ";           read -r PH </dev/tty; [ -z "$PH" ] && PH=A
-    printf "[setup] hoppers [1,2,3,4,5]: ";        read -r HP </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
-    { echo "PHONE=$PH"; echo "VPS_URL=$VU"; echo "KEY=$KY"; echo "HOPPERS=$HP"; } > config.txt
+    if [ ! -f config.txt ]; then                  # keep existing config on re-run (e.g. after reboot)
+        printf "[setup] VPS URL [https://api.kqing.web.id]: "; read -r VU </dev/tty; [ -z "$VU" ] && VU=https://api.kqing.web.id
+        printf "[setup] shared KEY: ";                read -r KY </dev/tty
+        printf "[setup] phone label [A]: ";           read -r PH </dev/tty; [ -z "$PH" ] && PH=A
+        printf "[setup] hoppers [1,2,3,4,5]: ";        read -r HP </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
+        { echo "PHONE=$PH"; echo "VPS_URL=$VU"; echo "KEY=$KY"; echo "HOPPERS=$HP"; } > config.txt
+    fi
 fi
 
 dl "$RAW/autoupdate.sh" autoupdate.sh              # keeps $ENTRY current + restarts it
