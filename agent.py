@@ -308,7 +308,10 @@ def _sp_floor(real_name: str, pumping: str):
     event/egg pets; StarPets realName is sometimes the full kind, sometimes the bare name —
     search by the year-stripped name and match realName against both. Logs failures."""
     stripped = re.sub(r"^.*?\d{4}_", "", real_name)
-    names = {real_name, stripped}
+    # match on the name with underscores stripped: Adopt Me's kind and StarPets' realName
+    # split words differently (dragonfruit_fox vs dragon_fruit_fox; frostbite_bear vs frostbitebear)
+    norm = lambda s: (s or "").replace("_", "").lower()
+    names = {norm(real_name), norm(stripped)}
     body = json.dumps({"filter": {"name": stripped.replace("_", " "),
                                   "types": [{"type": t} for t in ("pet", "egg")]},
                        "page": 1, "amount": 50, "currency": "usd",
@@ -326,7 +329,7 @@ def _sp_floor(real_name: str, pumping: str):
     if not items:
         _plog(f"{real_name}: fetch failed ({last_err})")
         return None, None
-    matches = [it for it in items if it.get("realName") in names
+    matches = [it for it in items if norm(it.get("realName")) in names
                and (it.get("pumping") or "default") == pumping and it.get("price")]
     if not matches:
         _plog(f"{real_name}|{pumping}: 0 matches in {len(items)} results (search='{stripped}')")
