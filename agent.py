@@ -285,9 +285,9 @@ PRICE_LOG = []         # recent price-worker log lines, surfaced by /pricelog
 PRICE_TS = {}          # pk -> last fetch time (in-memory; empty on restart => refetch all)
 PRICE_TTL = 3600       # re-fetch each price at most once per hour
 INTERVAL_PRICE = 120   # price-worker scan cadence (new pets + /refetch land within this)
-SP_ALIASES = {         # Adopt Me kind (year-stripped) -> StarPets realName, when the two names
-                       # diverge beyond word-splits (normalize can't bridge different words).
-    "acorn_wizard": "oakee_wizard",   # summer_2026_acorn_wizard on AM = oakee_wizard on StarPets
+SP_WORD_ALIASES = {    # word-level remap: Adopt Me names a pet-word differently than StarPets.
+                       # Applied per-word on the year-stripped name (so acorn_wizard -> oakee_wizard).
+    "acorn": "oakee",  # summer_2026_acorn_wizard on AM = oakee_wizard on StarPets
 }
 if PRICES_FILE.exists():
     try:
@@ -315,7 +315,7 @@ def _sp_floor(real_name: str, pumping: str):
     event/egg pets; StarPets realName is sometimes the full kind, sometimes the bare name —
     search by the year-stripped name and match realName against both. Logs failures."""
     stripped = re.sub(r"^.*?\d{4}_", "", real_name)
-    stripped = SP_ALIASES.get(stripped, stripped)      # remap kinds StarPets names differently
+    stripped = "_".join(SP_WORD_ALIASES.get(w, w) for w in stripped.split("_"))  # remap per word
     # match on the name with underscores stripped: Adopt Me's kind and StarPets' realName
     # split words differently (dragonfruit_fox vs dragon_fruit_fox; frostbite_bear vs frostbitebear)
     norm = lambda s: (s or "").replace("_", "").lower()
