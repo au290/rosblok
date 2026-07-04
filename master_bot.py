@@ -441,6 +441,18 @@ async def all_goto(i: discord.Interaction, url: str):
     await i.response.send_message(f"[{PHONE}] all hoppers → that link, holding. `/continue` to resume (link not saved)")
 
 
+@bot.tree.command(description="Pin ONE hopper to a pasted PS link and hold (link not saved)")
+async def pin(i: discord.Interaction, n: int, url: str):
+    write_cmd(n, f"pin {url.strip()}")
+    await i.response.send_message(f"[{PHONE}] hopper{n} → that link, holding. `/unpin {n}` or `/continue` (link not saved)")
+
+
+@bot.tree.command(description="Release ONE pinned hopper back to rotation")
+async def unpin(i: discord.Interaction, n: int):
+    clear_cmd(n)
+    await i.response.send_message(f"[{PHONE}] hopper{n} released, resuming rotation")
+
+
 @bot.tree.command(name="continue", description="Resume ALL hoppers' normal rotation")
 async def continue_(i: discord.Interaction):
     for n in HOPPERS:
