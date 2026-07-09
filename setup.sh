@@ -2,11 +2,15 @@
 # setup.sh - one-command phone setup for Termux. Downloads the agent, prompts for
 # config, and launches it (with auto-update) - everything in the Download folder.
 #
-#   pkg upgrade -y && curl -sL https://raw.githubusercontent.com/au290/rosblok/main/setup.sh | bash
+# SAFE bootstrap (download to a file, confirm it's the script, THEN run) - use this
+# on cloud phones, whose shared IPs hit GitHub's 429 rate limit a lot:
+#   pkg upgrade -y && curl -sL https://raw.githubusercontent.com/au290/rosblok/main/setup.sh -o setup.sh && head -1 setup.sh | grep -q '^#!' && bash setup.sh || echo "bad download (GitHub 429?) - wait a few minutes and retry"
 #
-# The `pkg upgrade -y` first heals a common broken curl (openssl/QUIC symbol
-# mismatch) so the download works. Default mode is 'agent' (VPS mode - polls
-# server.py). Type 'master' for a standalone single-phone bot with its own token.
+# The quick `curl -sL ... | bash` also works but pipes a 429 error page straight into
+# bash if you're rate-limited (you'll see '429: command not found'); prefer the above.
+# `pkg upgrade -y` first heals a common broken curl (openssl/QUIC symbol mismatch).
+# Default mode is 'agent' (VPS mode - polls server.py). Type 'master' for a standalone
+# single-phone bot with its own token.
 set -e
 
 DIR="/storage/emulated/0/Download"
@@ -18,8 +22,27 @@ pkg upgrade -y >/dev/null 2>&1 || true          # fixes curl 'CANNOT LINK EXECUT
 pkg install -y python tmux lua54 || true
 command -v lua >/dev/null || ln -sf "$(command -v lua5.4)" "$PREFIX/bin/lua"   # so `lua` works everywhere
 
-# download via python (always present in Termux) so a broken curl can't block setup
-dl() { python -c "import sys,urllib.request; open(sys.argv[2],'wb').write(urllib.request.urlopen(sys.argv[1]).read())" "$1" "$2"; }
+# download via python (always present in Termux) so a broken curl can't block setup.
+# Retries with backoff on GitHub's 429 (cloud phones share IPs that get rate-limited a
+# lot), sends a browser UA, and only writes the file once the whole body is in hand — so
+# a 429/abuse page never lands on disk as if it were code.
+dl() {
+    python - "$1" "$2" <<'PY'
+import sys, time, urllib.request
+url, out = sys.argv[1], sys.argv[2]
+req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (hopperbot setup)"})
+for i in range(6):
+    try:
+        data = urllib.request.urlopen(req, timeout=30).read()
+        open(out, "wb").write(data)
+        sys.exit(0)
+    except Exception as e:
+        sys.stderr.write("[dl] %s attempt %d failed: %s\n" % (url, i + 1, e))
+        time.sleep(min(60, 10 * (i + 1)))          # back off on 429 / abuse throttling
+sys.stderr.write("[dl] gave up on %s (GitHub 429? wait a few minutes)\n" % url)
+sys.exit(1)
+PY
+}
 
 echo "[setup] granting shared-storage access (tap Allow if prompted)..."
 termux-setup-storage 2>/dev/null || true
