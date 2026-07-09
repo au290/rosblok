@@ -35,10 +35,18 @@ function Hash-Of($path) {
 
 Restart-Bot
 while ($true) {
+    $wait = 60
     try {
         Invoke-WebRequest -Uri "$Raw/$Entry" -OutFile ".$Entry.new" -UseBasicParsing -TimeoutSec 20
         if ((Test-Path ".$Entry.new") -and ((Get-Item ".$Entry.new").Length -gt 0)) {
-            if ((Hash-Of ".$Entry.new") -ne (Hash-Of $Entry)) {
+            # only accept a download that compiles as Python — a GitHub 429/abuse page is
+            # non-empty and would otherwise clobber server.py and restart into a dead bot.
+            & $Py -m py_compile ".$Entry.new" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[vps_update] $(Get-Date -Format HH:mm:ss) bad download (not Python - likely GitHub 429); keeping current"
+                Remove-Item ".$Entry.new" -ErrorAction SilentlyContinue
+                $wait = 300                        # back off so we stop tripping the rate limit
+            } elseif ((Hash-Of ".$Entry.new") -ne (Hash-Of $Entry)) {
                 Move-Item ".$Entry.new" $Entry -Force
                 Write-Host "[vps_update] $(Get-Date -Format HH:mm:ss) $Entry changed - updating"
                 Restart-Bot
@@ -47,7 +55,9 @@ while ($true) {
             }
         }
     } catch {
+        # Invoke-WebRequest throws on 429/4xx; back off instead of hammering
+        if ("$_" -match "429|rate") { $wait = 300 }
         Write-Host "[vps_update] fetch error: $_"
     }
-    Start-Sleep -Seconds 60
+    Start-Sleep -Seconds $wait
 }

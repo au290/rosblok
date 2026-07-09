@@ -27,6 +27,15 @@ restart_bot() {
 restart_bot                                    # launch once at start
 while true; do
     if dl "$RAW/$ENTRY" ".$ENTRY.new" 2>/dev/null && [ -s ".$ENTRY.new" ]; then
+        # only accept a download that actually compiles as Python — a GitHub 429/abuse
+        # page ("429\nFor more info on scraping GitHub…") is non-empty and would otherwise
+        # clobber good code and restart into a broken bot.
+        if ! python -m py_compile ".$ENTRY.new" 2>/dev/null; then
+            echo "[autoupdate] $(date '+%H:%M:%S') bad download (not Python — likely GitHub 429); keeping current"
+            rm -f ".$ENTRY.new"
+            sleep 300                          # back off so we stop tripping the rate limit
+            continue
+        fi
         # md5sum < file → hash only (no filename), so first run (no local file) also updates
         if [ "$(md5sum < "$ENTRY" 2>/dev/null)" != "$(md5sum < ".$ENTRY.new")" ]; then
             mv ".$ENTRY.new" "$ENTRY"
