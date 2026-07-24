@@ -40,8 +40,8 @@ LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
 # pane's current command is usually one of these — count them all as "running" (idle = bash).
 RUNNING_CMDS = LUA_CMDS | {"sleep", "am", "su"}
 # Delta executor paths (its own app storage — not the Termux sandbox).
-INV_DIR  = Path("/storage/emulated/0/Delta/Workspace/inv")
-AUTOEXEC = Path("/storage/emulated/0/Delta/Autoexecute")
+INV_DIR  = Path("/storage/emulated/0/Arceus X/Workspace/inv")
+AUTOEXEC = Path("/storage/emulated/0/Arceus X/Autoexecute")
 
 DATA_DIR  = RUN_DIR
 MAP_FILE  = DATA_DIR / "servers.txt"
