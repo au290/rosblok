@@ -21,12 +21,12 @@ getgenv().VO_CONFIG = {
     -- === PET PEN ===
     PetPen = true,
     CustomPenEggs = {},
-    CustomPenPets = {"Purrowl", "Violet Friend"}, -- Pet names to keep in pen (empty = all)
+    CustomPenPets = {"Crystal Egg","Purrowl", "Violet Friend"}, -- Pet names to keep in pen (empty = all)
     PrioritizePetPenTypes = {"Neon"},  -- "Egg", "Normal", "Neon" (empty = all)
 
     -- === PET RELEASER ===
-    PetReleaser = false,
-    ReleasePets = {},       -- Whitelist: names to release (empty = all)
+    PetReleaser = true,
+    ReleasePets = {"Mega River Otter","Mega Chestnut Glyptodon","Mega Ruddy Duck"},       -- Whitelist: names to release (empty = all)
     ExcludeReleasePets = {}, -- Blacklist: base names or prefixed like ReleasePets ("Neon Dog", "Normal Cat", "Mega FG X")
     ReleaseTypes = {},      -- "Mega", "Neon", "Normal" (empty = all)
     ReleaseRarities = {},   -- If ReleasePets non-empty: only used for pets NOT named in ReleasePets. If ReleasePets empty: filters all candidates.
@@ -42,8 +42,8 @@ getgenv().VO_CONFIG = {
     AutoFuseBlacklist = {}, -- Pet names to never include in neon/mega fusion
 
     -- === BUY PETS ===
-    BuyPets = false,
-    BuyPetName = {"Pet Name", "Pet Name 2"},  -- Loops in order, buys all of first pet then moves to next
+    BuyPets = true,
+    BuyPetName = {"Crystal Egg"},  -- Loops in order, buys all of first pet then moves to next
 
     -- === BOXES ===
     BuyBoxes = false,
@@ -69,8 +69,6 @@ getgenv().VO_CONFIG = {
     },
     TradeItemList = {
          pets = {
-            "Neon FG River Otter",
-            "Neon FG Ruddy Duck",
             "Sushi Penguin",
             "Dragonfruit Fox",
             "Dango Penguins",
@@ -81,13 +79,9 @@ getgenv().VO_CONFIG = {
             "Neon FG Ancient Dragon",
             "Neon FG Stygian Owl",
             "FG General Sheepdog",
-            "Neon FG Chestnut Glyptodon",
-            "Mega River Otter",
-            "Mega Ruddy Duck",
             "Mega Purrowl",
             "Mega Ancient Dragon",
             "Mega Stygian Owl",
-            "Mega Chestnut Glyptodon",
             "Neon FG Sunflower Friend",
             "Neon FG Violet Friend",
         }, -- Pet names to trade (empty = all)
