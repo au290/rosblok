@@ -11,7 +11,7 @@ getgenv().VO_CONFIG = {
     KeepPetFarm = true, -- Added to keep looping your specific event pets
     EggName = {"cracked_egg"}, -- Ported from PetFarm.EggTypes
     PetFarmList = {
-        "Violet Friend",
+        "Violet Friend"
     }, -- Ported from PetFarm.SelectedPetTypes
     PrioritizePet = "Violet Friend", -- Set to the highest priority pet from your list
 
