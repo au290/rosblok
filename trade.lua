@@ -13,7 +13,7 @@ getgenv().VO_CONFIG = {
     PetFarmList = {
         "Violet Friend",
     }, -- Ported from PetFarm.SelectedPetTypes
-    PrioritizePet = "River Otter", -- Set to the highest priority pet from your list
+    PrioritizePet = "Violet Friend", -- Set to the highest priority pet from your list
 
     -- === EVENT ===
     AutoBeeGame = true, -- [DOESNT RENDER MAIN MAP] Complete storm challenge + buy all Storm Condors
