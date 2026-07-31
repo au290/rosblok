@@ -84,6 +84,8 @@ getgenv().VO_CONFIG = {
             "Mega Stygian Owl",
             "Neon FG Sunflower Friend",
             "Neon FG Violet Friend",
+            "Mega Violet Friend",
+            "Mega Sunflower Friend",
         }, -- Pet names to trade (empty = all)
     }, -- Per category: { pets = {"Dog","Neon Cat"}, food = {}, toys = {}, ... } — use "ALL" in a category to allow that whole category (pets still gated by TradePetType for bare names)
     TradePetType = {"ALL"},       -- Only applies to pets: "ALL", "Mega", "Neon", "Regular", "Neon_FG", "Regular_FG" — not used for food/toys/etc.; inline prefixes on pet strings (e.g. "Mega Dog") bypass this
