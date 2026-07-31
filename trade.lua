@@ -11,8 +11,7 @@ getgenv().VO_CONFIG = {
     KeepPetFarm = true, -- Added to keep looping your specific event pets
     EggName = {"cracked_egg"}, -- Ported from PetFarm.EggTypes
     PetFarmList = {
-        "River Otter",
-        "Ruddy Duck",
+        "Violet Friend",
     }, -- Ported from PetFarm.SelectedPetTypes
     PrioritizePet = "River Otter", -- Set to the highest priority pet from your list
 
@@ -22,7 +21,7 @@ getgenv().VO_CONFIG = {
     -- === PET PEN ===
     PetPen = true,
     CustomPenEggs = {},
-    CustomPenPets = {"Purrowl", "Sunflower Friend","Violet Friend"}, -- Pet names to keep in pen (empty = all)
+    CustomPenPets = {"Purrowl", "Violet Friend"}, -- Pet names to keep in pen (empty = all)
     PrioritizePetPenTypes = {"Neon"},  -- "Egg", "Normal", "Neon" (empty = all)
 
     -- === PET RELEASER ===
