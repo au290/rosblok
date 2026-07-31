@@ -33,7 +33,7 @@ getgenv().VO_CONFIG = {
     ExcludeRarities = {},   -- Blacklist rarities (pets on ReleasePets by name bypass this)
 
     -- === AGE PETS ===
-    AgePets = true,
+    AgePets = false,
     AgePetsNames = {"River Otter"}, -- Pet names to age (empty = all)
     AgePetsTypes = {"Normal"},  -- "Normal", "Neon", "ALL"
 
