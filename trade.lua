@@ -22,7 +22,7 @@ getgenv().VO_CONFIG = {
     -- === PET PEN ===
     PetPen = true,
     CustomPenEggs = {},
-    CustomPenPets = {"River Otter", "Ruddy Duck","Purrowl", "Sunflower Friend","Violet Friend","Chestnut Glyptodon","Ancient Dragon","Stygian Owl"}, -- Pet names to keep in pen (empty = all)
+    CustomPenPets = {"Purrowl", "Sunflower Friend","Violet Friend"}, -- Pet names to keep in pen (empty = all)
     PrioritizePetPenTypes = {"Neon"},  -- "Egg", "Normal", "Neon" (empty = all)
 
     -- === PET RELEASER ===
