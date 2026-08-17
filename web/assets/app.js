@@ -130,7 +130,7 @@
       const tradeStatus = String(trade.status || "no script");
       const stale = tradeStatus !== "stopped" && !trade.fresh && tradeStatus !== "no script";
       const tradeLabel = tradeStatus === "no script"
-        ? (Number(trade.grace || 0) > 0 ? `Starting / ${integer(trade.grace)}s grace` : "Running / no script")
+        ? "No script / rejoining"
         : stale
           ? `Stale / ${integer(trade.age)}s`
           : tradeStatus === "disconnected" || tradeStatus === "error"

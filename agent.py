@@ -59,7 +59,6 @@ TRADE_DIRS = [
     Path("/storage/emulated/0/Delta/Autoexecute"),
 ]
 TRADE_STALE_SECONDS = 40
-TRADE_LAUNCH_GRACE = 45
 TRADE_RETRY_COOLDOWN = 10
 
 DATA_DIR  = RUN_DIR
@@ -94,9 +93,6 @@ if _cfg.exists():
                 TRADE_DIRS = [Path(x.strip()) for x in _v.split(",") if x.strip()]
             elif _k == "TRADE_STALE_SECONDS":
                 try: TRADE_STALE_SECONDS = max(10, int(_v))
-                except ValueError: pass
-            elif _k == "TRADE_LAUNCH_GRACE":
-                try: TRADE_LAUNCH_GRACE = max(5, int(_v))
                 except ValueError: pass
             elif _k.startswith("PACKAGE_"):
                 try:
@@ -439,8 +435,7 @@ def _trade_needs_retry(state: dict, trade: dict | None, now: float) -> bool:
         return False
     if trade and trade.get("fresh"):
         return str(trade.get("status", "")).lower() in {"disconnected", "error"}
-    launched = state.get("trade_launch_at") or state.get("last_launch") or now
-    return now - launched >= TRADE_LAUNCH_GRACE
+    return True
 
 
 def parse_private_server(link: str) -> tuple[str, str]:
@@ -482,7 +477,13 @@ def deep_link(link: str) -> str:
     return f"roblox://placeId={quote(place, safe='')}&linkCode={quote(code, safe='')}"
 
 
-def _launch_locked(state: dict, link: str, index: int | None = None, label: str = "") -> None:
+def _launch_locked(
+    state: dict,
+    link: str,
+    index: int | None = None,
+    label: str = "",
+    retry_at: float = 0.0,
+) -> None:
     target = deep_link(link)
     package = state["package"]
     if not _PACKAGE_RE.fullmatch(package or ""):
@@ -517,19 +518,19 @@ def _launch_locked(state: dict, link: str, index: int | None = None, label: str 
     state.update({"actual": True, "link": str(link).strip(), "deep_link": target,
                   "last_launch": launched_at, "last_health": launched_at,
                   "trade": None, "trade_launch_at": launched_at,
-                  "trade_started_at": 0.0, "trade_retry_at": 0.0})
+                  "trade_started_at": 0.0, "trade_retry_at": retry_at})
     if index is not None:
         state["index"] = index
     _log(state, f"Launching {label or ('RF' + str((state['index'] or 0) + 1))}: {target}")
 
 
-def _launch_index_locked(state: dict, index: int) -> None:
+def _launch_index_locked(state: dict, index: int, retry_at: float = 0.0) -> None:
     links = hopper_links(state["hopper"])
     if not links:
         raise ValueError(f"hopper{state['hopper']} has no saved servers")
     if not 0 <= index < len(links):
         raise ValueError(f"hopper{state['hopper']} has no RF{index + 1} (has RF1..RF{len(links)})")
-    _launch_locked(state, links[index], index=index)
+    _launch_locked(state, links[index], index=index, retry_at=retry_at)
 
 
 def is_running(n: int) -> bool:
@@ -607,9 +608,11 @@ def tick_hoppers() -> None:
                         reason = "no script" if trade is None else (
                             "stale script" if not trade.get("fresh") else trade.get("status", "error")
                         )
-                        state["trade_retry_at"] = now + TRADE_RETRY_COOLDOWN
+                        retry_at = now + TRADE_RETRY_COOLDOWN
                         _log(state, f"{reason}; relaunching pinned server")
-                        _launch_locked(state, state["link"], index=state.get("index"), label="PIN")
+                        _launch_locked(
+                            state, state["link"], index=state.get("index"), label="PIN", retry_at=retry_at
+                        )
                     elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
                         state["actual"] = app_running(state["package"])
                         state["last_health"] = now
@@ -638,9 +641,9 @@ def tick_hoppers() -> None:
                     reason = "no script" if trade is None else (
                         "stale script" if not trade.get("fresh") else status
                     )
-                    state["trade_retry_at"] = now + TRADE_RETRY_COOLDOWN
+                    retry_at = now + TRADE_RETRY_COOLDOWN
                     _log(state, f"{reason}; relaunching RF{state['index'] + 1}")
-                    _launch_index_locked(state, state["index"])
+                    _launch_index_locked(state, state["index"], retry_at=retry_at)
                 elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
                     state["actual"] = app_running(state["package"])
                     state["last_health"] = now
@@ -964,12 +967,9 @@ def trade_snapshot() -> dict:
                 continue
             trade = _refresh_trade_locked(state, now)
             if trade is None:
-                launched = state.get("trade_launch_at") or state.get("last_launch") or now
-                grace_left = max(0, math.ceil(TRADE_LAUNCH_GRACE - (now - launched)))
                 snapshot[str(n)] = {
                     "status": "no script",
                     "fresh": False,
-                    "grace": grace_left,
                 }
             else:
                 snapshot[str(n)] = dict(trade)

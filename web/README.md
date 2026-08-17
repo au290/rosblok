@@ -152,8 +152,9 @@ workspace locations, using root access for cloned package storage when needed.
 The heartbeat must contain `status` and Unix-seconds `ts`. A fresh `completed`
 status advances to the next saved server. Fresh `disconnected` or `error`
 statuses relaunch the current server. Every other fresh status keeps the
-current server running. A missing file after launch grace, or a heartbeat older
-than 40 seconds, relaunches the current server and never advances it. Pinned
+current server running. A missing file or a heartbeat older than 40 seconds
+relaunches the current server immediately and never advances it. Automatic
+retries are limited by a short cooldown to avoid a relaunch loop. Pinned
 hoppers always remain on their pinned server.
 
 There is no fixed server timer. The Runtime column starts at the first fresh
@@ -172,7 +173,6 @@ different workspace or heartbeat timing:
 ```text
 TRADE_DIRS=/storage/emulated/0/Delta/Workspace
 TRADE_STALE_SECONDS=40
-TRADE_LAUNCH_GRACE=45
 ```
 
 `WINDOW_MODE=auto` checks Android's freeform-window feature and global setting.

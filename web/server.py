@@ -186,10 +186,6 @@ def _normalise_trade_report(value: object) -> dict | None:
             continue
         if math.isfinite(number) and number >= 0:
             result[key] = int(number) if number.is_integer() else number
-    try:
-        result["grace"] = max(0, min(int(value.get("grace", 0)), 3600))
-    except (TypeError, ValueError):
-        pass
     filename = Path(str(value.get("file", ""))).name
     if re.fullmatch(r"[^/\\]+_winteraddons\.json", filename, re.I):
         result["file"] = filename

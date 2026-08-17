@@ -210,7 +210,7 @@ class SimulatedPhone:
                 continue
             status = statuses[(number - 1) % len(statuses)]
             if status == "no script":
-                result[str(number)] = {"status": status, "fresh": False, "grace": 0}
+                result[str(number)] = {"status": status, "fresh": False}
                 continue
             result[str(number)] = {
                 "status": status,

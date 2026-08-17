@@ -145,7 +145,6 @@ else
     default_config START_ON_BOOT "false"
     default_config AUTO_DETECT_PACKAGES "true"
     default_config TRADE_STALE_SECONDS "40"
-    default_config TRADE_LAUNCH_GRACE "45"
 fi
 
 dl "$RAW/autoupdate.sh" autoupdate.sh              # keeps $ENTRY current + restarts it
