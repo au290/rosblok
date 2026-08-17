@@ -132,7 +132,11 @@ if [ "$MODE" = "master" ]; then
 else
     ENTRY=agent.py
     dl "$RAW/$ENTRY" "$ENTRY"                     # agent needs no pip deps (stdlib only)
-    ensure_config VPS_URL "VPS URL" "https://api.kqing.web.id" required
+    # Move installs that still use the retired public default to the current endpoint.
+    if [ "$(config_get VPS_URL)" = "https://api.kqing.web.id" ]; then
+        config_set VPS_URL "http://agent.kqing.web.id"
+    fi
+    ensure_config VPS_URL "VPS URL" "http://agent.kqing.web.id" required
     ensure_config KEY "shared KEY" "" required
     ensure_config PHONE "phone label" "A" required
     ensure_config HOPPERS "hoppers" "1,2,3,4,5" required

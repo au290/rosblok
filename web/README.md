@@ -10,8 +10,9 @@ POST /api/{phone}/poll
 X-Key: <KEY>
 ```
 
-Point each phone's `VPS_URL` at this web server. Use the current `agent.py` so
-device rotation settings can be saved and reported to the dashboard.
+Point each phone's `VPS_URL` at `http://agent.kqing.web.id` (or your own
+reverse-proxy URL). Use the current `agent.py` so device rotation settings can
+be saved and reported to the dashboard.
 
 ## Run
 
@@ -81,7 +82,7 @@ proxy before exposing it to the internet.
 On the phone, edit `/storage/emulated/0/Download/config.txt`:
 
 ```text
-VPS_URL=http://<server>:8090
+VPS_URL=http://agent.kqing.web.id
 KEY=the-same-value-as-web-config
 PHONE=A
 HOPPERS=1,2,3,4,5

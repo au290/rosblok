@@ -37,6 +37,10 @@ hopper rotations on the device. Swap/Trade addon heartbeat files named
 `<username>_winteraddons.json` drive server advancement and same-server
 recovery without requiring changes to the addon.
 
+The default web endpoint is `http://agent.kqing.web.id`. Existing installs that
+still contain the retired `https://api.kqing.web.id` default are migrated by
+`setup.sh`; custom `VPS_URL` values are preserved.
+
 ## Archive
 
 Legacy Discord/VPS scripts, old build outputs, research notes, generated data,

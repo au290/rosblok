@@ -12,7 +12,7 @@ local Players     = game:GetService("Players")
 repeat task.wait() until game:IsLoaded()
 task.wait(3)
 
-local VPS_URL  = "http://YOUR_VPS_IP:8090" -- no trailing slash
+local VPS_URL  = "http://agent.kqing.web.id" -- no trailing slash
 local KEY      = "CHANGE_ME_SHARED_SECRET" -- must match web/config.txt
 local PHONE    = "A"                       -- phone id configured in web/config.txt
 local INTERVAL = 30

@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 from collections import deque
 
 # ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
-VPS_URL  = "http://YOUR_VPS_IP:8080"   # where server.py listens
+VPS_URL  = "http://agent.kqing.web.id" # public web server endpoint
 KEY      = "CHANGE_ME_SHARED_SECRET"   # must match server.py KEY
 PHONE    = "A"                          # this phone's id ("A" / "B")
 HOPPERS  = [1, 2, 3, 4, 5]              # this phone's hoppers
@@ -103,6 +103,8 @@ if _cfg.exists():
                     PACKAGE_OVERRIDES[int(_k[8:])] = _v
                 except ValueError:
                     pass
+
+VPS_URL = VPS_URL.rstrip("/")
 
 
 # ─────────────────────────── direct Android hopper control ───────────────────
