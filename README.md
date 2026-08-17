@@ -8,7 +8,8 @@ This workspace contains the active web control plane and phone agent.
 - `agent.py` - phone-side Roblox package launcher and rotation worker
 - `monitor_adoptme.lua` - direct inventory reporter for the executor
 - `setup.sh` - Termux installer and config repair script
-- `setup-vps.sh` - VPS web control-plane installer and service bootstrap
+- `setup-vps.ps1` - Windows 11 VPS installer and automatic-start bootstrap
+- `setup-vps.sh` - optional Linux VPS installer
 - `autoupdate.sh` - phone-side agent updater
 
 ## Web Dashboard
@@ -25,12 +26,12 @@ phone-agent configuration, rotations, seeding, and deployment details.
 
 ## One-line Setup
 
-On a Debian/Ubuntu VPS, run this safe bootstrap. It installs Python, creates the
-web virtualenv, generates missing `KEY` and `WEB_TOKEN` values, and starts the
-dashboard as `panen-web` when systemd is available:
+On the Windows 11 VPS, open PowerShell and run this one line. It installs Python
+through `winget` when needed, creates the web virtualenv, generates missing
+`KEY` and `WEB_TOKEN` values, and configures automatic startup:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.sh -o /tmp/panen-vps.sh && bash /tmp/panen-vps.sh
+```powershell
+$ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.ps1" -UseBasicParsing -ErrorAction Stop -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
 On an Android phone running Termux, run the phone installer. It preserves
@@ -42,7 +43,8 @@ pkg upgrade -y && curl -fsSL https://raw.githubusercontent.com/au290/rosblok/mai
 
 The VPS installer prints the generated phone `KEY` and browser `WEB_TOKEN` at
 the end. Put the phone key in the Termux prompts/config; use the browser token
-only for dashboard login.
+only for dashboard login. Re-running either installer updates the code while
+preserving existing configuration and secrets.
 
 ## Phone Agent
 

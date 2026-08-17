@@ -8,6 +8,7 @@
 !autoupdate.sh
 !setup.sh
 !setup-vps.sh
+!setup-vps.ps1
 !monitor_adoptme.lua
 !README.md
 !web/
