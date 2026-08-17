@@ -112,11 +112,7 @@ def normalise_rotation(value: Any) -> dict[str, Any]:
             link = str(item).strip()
             if link and link not in links:
                 links.append(link)
-    try:
-        cooldown = max(3, min(int(value.get("cooldown", 240) or 240), 86400))
-    except (TypeError, ValueError):
-        cooldown = 240
-    return {"links": links, "loop": bool(value.get("loop", True)), "cooldown": cooldown}
+    return {"links": links, "loop": bool(value.get("loop", True))}
 
 
 @dataclass
@@ -127,36 +123,21 @@ class Hopper:
     held: bool = False
     pin_url: str = ""
     server_index: int = 0
-    elapsed: float = 0.0
+    runtime: float = 0.0
     changed_at: float = field(default_factory=time.monotonic)
 
     def tick(self, now: float) -> None:
-        if not self.running or self.held:
+        if not self.running:
             self.changed_at = now
             return
-        self.elapsed += max(0.0, now - self.changed_at)
+        self.runtime += max(0.0, now - self.changed_at)
         self.changed_at = now
-        links = self.rotation["links"]
-        cooldown = self.rotation["cooldown"]
-        if not links:
-            self.elapsed = 0.0
-            return
-        while self.elapsed >= cooldown:
-            self.elapsed -= cooldown
-            if self.server_index + 1 < len(links):
-                self.server_index += 1
-            elif self.rotation["loop"]:
-                self.server_index = 0
-            else:
-                self.running = False
-                self.elapsed = float(cooldown)
-                break
 
     def set_running(self, running: bool) -> None:
         self.running = running
         self.held = False
         self.pin_url = ""
-        self.elapsed = 0.0
+        self.runtime = 0.0
         self.changed_at = time.monotonic()
 
     def current_link(self) -> str:
@@ -177,7 +158,7 @@ class SimulatedPhone:
         # useful for testing, instead of showing every hopper on RF1 at 0s.
         for number, hopper in self.hoppers.items():
             hopper.server_index = (number - 1) % len(hopper.rotation["links"])
-            hopper.elapsed = float((number * 17) % hopper.rotation["cooldown"])
+            hopper.runtime = float(number * 17)
         self.link_pool = [link for hopper in self.hoppers.values() for link in hopper.rotation["links"]]
         self.last_error = ""
         self.poll_count = 0
@@ -243,7 +224,7 @@ class SimulatedPhone:
                 ],
                 "meta": {
                     "players": f"{2 + number % 4}/6",
-                    "runtime": int(hopper.elapsed),
+                    "runtime": int(hopper.runtime),
                     "categories": {"rods": 1, "pets": number},
                 },
                 "file": f"Sim_{self.phone}_Trader_{number}_winteraddons.json",
@@ -266,12 +247,9 @@ class SimulatedPhone:
                 continue
             link = hopper.current_link()
             server = f"RF{hopper.server_index + 1}" if link else "??"
-            total = hopper.rotation["cooldown"]
-            elapsed = min(total, int(hopper.elapsed))
-            progress = f"{elapsed:>3}/{total}s"
-            rows.append(f"{number:>2}  {server:<5} {progress}")
+            rows.append(f"{number:>2}  {server:<5} {int(hopper.runtime):>5}s runtime")
             current.append(f"{number}:{server}")
-        board = "```\n #  srv   progress\n" + "\n".join(rows) + "\n```"
+        board = "```\n #  srv   runtime\n" + "\n".join(rows) + "\n```"
         footer = f"simulator | 512MB free | load 0.18 | 7.4G free | {running}/{len(self.hoppers)} running"
         return board, footer, current
 
@@ -312,10 +290,10 @@ class SimulatedPhone:
             hopper = self._hopper(args[0])
             hopper.rotation = normalise_rotation(json.loads(args[1]))
             hopper.server_index = min(hopper.server_index, max(0, len(hopper.rotation["links"]) - 1))
-            hopper.elapsed = 0.0
+            hopper.runtime = 0.0
             hopper.changed_at = time.monotonic()
             mode = "looping" if hopper.rotation["loop"] else "one-shot"
-            return f"saved simulated hopper{hopper.number} rotation: {len(hopper.rotation['links'])} server(s), {mode}, {hopper.rotation['cooldown']}s cooldown"
+            return f"saved simulated hopper{hopper.number} rotation: {len(hopper.rotation['links'])} server(s), {mode}"
         if action in {"start", "stop", "restart"}:
             hopper = self._hopper(args[0])
             if action == "start":
@@ -340,7 +318,7 @@ class SimulatedPhone:
             if not 1 <= server <= len(hopper.rotation["links"]):
                 return f"hopper{hopper.number} has no RF{server} (has RF1..RF{len(hopper.rotation['links'])})"
             hopper.server_index = server - 1
-            hopper.elapsed = 0.0
+            hopper.runtime = 0.0
             hopper.running = True
             hopper.held = action == "goto_pin"
             hopper.pin_url = hopper.current_link() if hopper.held else ""

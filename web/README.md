@@ -72,7 +72,7 @@ The dashboard has three sections in the left sidebar:
 - **Hopper control** gives every reported hopper its own row. Select rows to
   start or stop them together, or use row actions to control one hopper. The
   phone is routed automatically from the row. The gear action edits that
-  hopper's private-server rotation, progress window, and loop mode.
+  hopper's private-server rotation and loop mode.
 - **Pet trackstat** lists each reported pet variant with count, full-grown
   progress, rarity, and estimated value.
 
@@ -156,6 +156,11 @@ current server running. A missing file after launch grace, or a heartbeat older
 than 40 seconds, relaunches the current server and never advances it. Pinned
 hoppers always remain on their pinned server.
 
+There is no fixed server timer. The Runtime column starts at the first fresh
+heartbeat written by the script after Roblox launches and continues without a
+cap. It resets only when the agent launches or rejoins a server; runtime never
+causes a hop by itself.
+
 `count`, `items`, and `meta` are validated and shown in the Trade column. This
 live trade report is kept only in agent/server memory and is not saved on the
 VPS. The filename also supplies a fallback account label when package-local
@@ -188,8 +193,7 @@ to that row's phone and stored locally in:
 The modal stays open after a save and shows the links reported back from the
 device. The phone also rebuilds `link.txt` and `servers.txt` for compatibility
 with old tools. The direct runtime applies the saved links and one-pass mode
-itself. The progress window controls the visual timer; the trade heartbeat
-decides when to advance. Package health is also checked with `pidof`,
+itself. The trade heartbeat decides when to advance. Package health is also checked with `pidof`,
 relaunching the current server if the app exits.
 
 The VPS is only a control and display layer. A saved rotation keeps running

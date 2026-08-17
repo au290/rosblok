@@ -67,7 +67,6 @@ MAP_FILE  = DATA_DIR / "servers.txt"
 POOL_FILE = DATA_DIR / "link.txt"
 ROTATION_FILE = DATA_DIR / "rotations.json"
 ROTATION_DIR = DATA_DIR / "rotations"
-DEFAULT_COOLDOWN = 240
 
 # config.txt (gitignored) overrides the CONFIG block above
 _cfg = BASE_DIR / "config.txt"
@@ -189,9 +188,9 @@ def _runtime(n: int) -> dict:
             state = {
                 "hopper": n, "package": package_for(n), "desired": False,
                 "actual": False, "held": False, "index": None,
-                "link": "", "deep_link": "", "next_at": 0.0,
+                "link": "", "deep_link": "",
                 "last_launch": 0.0, "last_health": 0.0,
-                "trade": None, "trade_launch_at": 0.0,
+                "trade": None, "trade_launch_at": 0.0, "trade_started_at": 0.0,
                 "trade_retry_at": 0.0, "trade_file": "",
                 "logs": deque(maxlen=80),
             }
@@ -411,6 +410,8 @@ def read_trade_status(state: dict, now: float | None = None) -> dict | None:
 
 
 def _refresh_trade_locked(state: dict, now: float | None = None) -> dict | None:
+    now = time.time() if now is None else now
+    previous_file = state.get("trade_file", "")
     trade = read_trade_status(state, now)
     launched = state.get("trade_launch_at") or state.get("last_launch") or 0
     # A heartbeat from before this launch belongs to the server we just left.
@@ -420,6 +421,15 @@ def _refresh_trade_locked(state: dict, now: float | None = None) -> dict | None:
         trade = dict(trade)
         trade["fresh"] = False
         trade["previous_session"] = True
+    if trade is not None and state.get("trade_file", "") != previous_file:
+        state["trade_started_at"] = 0.0
+    if trade is not None and trade.get("fresh") and not trade.get("previous_session"):
+        if not state.get("trade_started_at"):
+            state["trade_started_at"] = float(trade.get("ts", now))
+        runtime = max(0, int(now - state["trade_started_at"]))
+        meta = dict(trade.get("meta") or {}) if isinstance(trade.get("meta"), dict) else {}
+        meta["runtime"] = runtime
+        trade["meta"] = meta
     state["trade"] = trade
     return trade
 
@@ -507,11 +517,9 @@ def _launch_locked(state: dict, link: str, index: int | None = None, label: str 
     state.update({"actual": True, "link": str(link).strip(), "deep_link": target,
                   "last_launch": launched_at, "last_health": launched_at,
                   "trade": None, "trade_launch_at": launched_at,
-                  "trade_retry_at": 0.0})
+                  "trade_started_at": 0.0, "trade_retry_at": 0.0})
     if index is not None:
         state["index"] = index
-    rotation = ensure_rotations().get(str(state["hopper"]), {})
-    state["next_at"] = time.time() + int(rotation.get("cooldown", DEFAULT_COOLDOWN))
     _log(state, f"Launching {label or ('RF' + str((state['index'] or 0) + 1))}: {target}")
 
 
@@ -560,9 +568,9 @@ def stop_hopper(n: int) -> str:
         package = state["package"]
         _su(f"am force-stop {shlex.quote(package)}", timeout=15)
         state["actual"] = False
-        state["next_at"] = 0
         state["trade"] = None
         state["trade_launch_at"] = 0
+        state["trade_started_at"] = 0
         state["trade_retry_at"] = 0
         _log(state, "stopped")
     return f"stopped hopper{n}" if was_running else f"hopper{n} not started"
@@ -693,12 +701,7 @@ def _normalise_rotation(value) -> dict:
     if not isinstance(links, list):
         links = []
     links = [str(link).strip() for link in links if str(link).strip()]
-    try:
-        cooldown = int(value.get("cooldown", DEFAULT_COOLDOWN))
-    except (TypeError, ValueError):
-        cooldown = DEFAULT_COOLDOWN
-    cooldown = max(3, min(cooldown, 86400))
-    return {"links": links[:100], "loop": bool(value.get("loop", True)), "cooldown": cooldown}
+    return {"links": links[:100], "loop": bool(value.get("loop", True))}
 
 
 def load_rotations() -> dict:
@@ -728,7 +731,7 @@ def _write_rotation_files(rotations: dict) -> None:
         except (TypeError, ValueError):
             continue
         data = _normalise_rotation(value)
-        header = f"# cooldown={data['cooldown']} loop={'true' if data['loop'] else 'false'}\n"
+        header = f"# loop={'true' if data['loop'] else 'false'}\n"
         body = header + "".join(f"{link}\n" for link in data["links"])
         _atomic_write(ROTATION_DIR / f"h{hopper}.txt", body)
 
@@ -760,7 +763,7 @@ def ensure_rotations() -> dict:
                 pass
         return rotations
     rotations = {
-        str(n): {"links": legacy_hopper_links(n), "loop": True, "cooldown": DEFAULT_COOLDOWN}
+        str(n): {"links": legacy_hopper_links(n), "loop": True}
         for n in HOPPERS
     }
     try:
@@ -799,13 +802,10 @@ def set_rotation(n: int, value: dict) -> str:
             current = state.get("link", "")
             if current in links:
                 state["index"] = links.index(current)
-                state["next_at"] = time.time() + rotations[str(n)]["cooldown"]
             else:
                 state["index"] = None
-                if state.get("desired") and not state.get("held"):
-                    state["next_at"] = 0
     mode = "looping" if rotations[str(n)]["loop"] else "one-shot"
-    return f"saved hopper{n} rotation: {len(links)} server(s), {mode}, {rotations[str(n)]['cooldown']}s cooldown"
+    return f"saved hopper{n} rotation: {len(links)} server(s), {mode}"
 
 
 def goto_hopper(n: int, server: int, hold: bool = False) -> str:
@@ -910,11 +910,6 @@ def do_autotrade(o: dict) -> str:
 
 
 # ─────────────────────────── status board ───────────────────────────
-def _bar(el: int, tot: int, w: int = 10) -> str:
-    f = min(w, int(w * el / tot)) if tot else 0
-    return "█" * f + "░" * (w - f)
-
-
 def device_health() -> str:
     def sh(c):
         return subprocess.run(c, shell=True, capture_output=True, text=True, errors="replace").stdout
@@ -944,12 +939,15 @@ def build_board():
         links = hopper_links(n)
         srv = f"RF{index + 1}" if index is not None and index < len(links) else None
         now.append(f"{n}:{srv or '?'}")
-        rotation = _normalise_rotation(ensure_rotations().get(str(n), {}))
-        total = rotation["cooldown"] if srv else 0
-        elapsed = max(0, min(total, int(time.time() - state.get("last_launch", time.time())))) if total else 0
-        prog = f"{_bar(elapsed, total)} {elapsed:>3}/{total}s" if total else "starting…"
-        rows.append(f"{n:>2}  {srv or '??':<5} {prog}")
-    board  = "```\n #  srv   progress\n" + "\n".join(rows) + "\n```"
+        trade = state.get("trade") or {}
+        meta = trade.get("meta") if isinstance(trade.get("meta"), dict) else {}
+        runtime = meta.get("runtime")
+        if isinstance(runtime, (int, float)) and not isinstance(runtime, bool) and runtime >= 0:
+            timer = f"{int(runtime):>5}s runtime"
+        else:
+            timer = "waiting for script"
+        rows.append(f"{n:>2}  {srv or '??':<5} {timer}")
+    board  = "```\n #  srv   runtime\n" + "\n".join(rows) + "\n```"
     footer = f"{device_health()} · {up}/{len(HOPPERS)} running"
     return board, footer, now
 
@@ -1292,13 +1290,13 @@ def safe(cmd: str) -> str:
 
 # ─────────────────────────── poll loop ───────────────────────────
 def poll(results: list) -> list:
+    trades = trade_snapshot()
     board, footer, now = build_board()
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
     packages = {
         str(n): _runtime(n)["package"] for n in HOPPERS
         if _runtime(n)["package"]
     }
-    trades = trade_snapshot()
     accounts = {
         number: account
         for number, trade in trades.items()

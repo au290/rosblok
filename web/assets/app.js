@@ -20,6 +20,15 @@
     return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
   }
 
+  function duration(value) {
+    const seconds = Math.max(0, Math.floor(Number(value) || 0));
+    if (seconds < 60) return `${seconds}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    if (minutes < 60) return `${minutes}m ${remainder}s`;
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainder}s`;
+  }
+
   async function api(path, options = {}) {
     const response = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
     let data = {};
@@ -115,9 +124,8 @@
     selectAll.indeterminate = visible.some((hopper) => selectedHoppers.has(hopper.id)) && !selectAll.checked;
     if (!visible.length) { $("hopper-body").innerHTML = `<tr><td colspan="8" class="empty">No matching hoppers</td></tr>`; return; }
     $("hopper-body").innerHTML = visible.map((hopper) => {
-      const fraction = hopper.total > 0 ? Math.min(100, Math.round((hopper.elapsed / hopper.total) * 100)) : 0;
       const status = hopper.status === "held" ? "Paused" : hopper.status[0].toUpperCase() + hopper.status.slice(1);
-      const progress = hopper.total > 0 ? `${integer(hopper.elapsed)}s / ${integer(hopper.total)}s` : "-";
+      const runtime = hopper.runtime != null ? duration(hopper.runtime) : "-";
       const trade = hopper.trade || {};
       const tradeStatus = String(trade.status || "no script");
       const stale = tradeStatus !== "stopped" && !trade.fresh && tradeStatus !== "no script";
@@ -135,8 +143,8 @@
       const itemTitle = items.map((item) => `${item.qty ?? 0}x ${item.name}`).join(", ");
       const meta = trade.meta || {};
       const categories = meta.categories && typeof meta.categories === "object" ? Object.entries(meta.categories).slice(0, 3).map(([name, count]) => `${name}: ${integer(count)}`).join(", ") : "";
-      const details = [trade.count != null ? `${integer(trade.count)} trades` : "", itemText, meta.players ? `${meta.players} players` : "", meta.runtime != null ? `${integer(meta.runtime)}s runtime` : "", categories].filter(Boolean).join(" / ") || "Waiting for heartbeat";
-      return `<tr><td class="check-column"><input class="hopper-check" data-hopper-id="${escapeHtml(hopper.id)}" type="checkbox" ${selectedHoppers.has(hopper.id) ? "checked" : ""} aria-label="Select hopper ${escapeHtml(hopper.hopper)}"></td><td class="device-cell"><span class="device-name ${hopper.online ? "online" : ""}">${escapeHtml(hopper.device)}</span><span class="cell-secondary">${escapeHtml(hopper.phone)} &middot; hopper ${escapeHtml(hopper.hopper)}</span></td><td class="account-cell"><span class="cell-primary">${escapeHtml(hopper.account)}</span><span class="cell-secondary">${escapeHtml(hopper.package)}</span></td><td class="target-cell"><span class="cell-primary">${escapeHtml(hopper.target)}</span><span class="cell-secondary">${escapeHtml(hopper.server ? "private server" : "rotation")}</span></td><td class="progress-cell"><span class="progress-label">${escapeHtml(progress)}</span><div class="progress-track"><span style="width:${fraction}%"></span></div></td><td class="trade-cell" title="${escapeHtml(itemTitle)}"><span class="cell-primary trade-state ${tradeClass}">${tradeLabelHtml}</span><span class="cell-secondary">${escapeHtml(details)}</span></td><td><span class="status-label ${escapeHtml(hopper.status)}">${escapeHtml(status)}</span></td><td><div class="row-actions"><button class="configure" data-hopper-action="rotation" data-hopper-id="${escapeHtml(hopper.id)}" title="Edit rotation" aria-label="Edit rotation">&#9881;</button><button class="play" data-hopper-action="start" data-hopper-id="${escapeHtml(hopper.id)}" title="Start hopper" aria-label="Start hopper">&#9654;</button><button class="stop" data-hopper-action="stop" data-hopper-id="${escapeHtml(hopper.id)}" title="Stop hopper" aria-label="Stop hopper">&#9632;</button><button class="restart" data-hopper-action="restart" data-hopper-id="${escapeHtml(hopper.id)}" title="Restart hopper" aria-label="Restart hopper">&#8635;</button></div></td></tr>`;
+      const details = [trade.count != null ? `${integer(trade.count)} trades` : "", itemText, meta.players ? `${meta.players} players` : "", categories].filter(Boolean).join(" / ") || "Waiting for heartbeat";
+      return `<tr><td class="check-column"><input class="hopper-check" data-hopper-id="${escapeHtml(hopper.id)}" type="checkbox" ${selectedHoppers.has(hopper.id) ? "checked" : ""} aria-label="Select hopper ${escapeHtml(hopper.hopper)}"></td><td class="device-cell"><span class="device-name ${hopper.online ? "online" : ""}">${escapeHtml(hopper.device)}</span><span class="cell-secondary">${escapeHtml(hopper.phone)} &middot; hopper ${escapeHtml(hopper.hopper)}</span></td><td class="account-cell"><span class="cell-primary">${escapeHtml(hopper.account)}</span><span class="cell-secondary">${escapeHtml(hopper.package)}</span></td><td class="target-cell"><span class="cell-primary">${escapeHtml(hopper.target)}</span><span class="cell-secondary">${escapeHtml(hopper.server ? "private server" : "rotation")}</span></td><td class="runtime-cell"><span class="cell-primary">${escapeHtml(runtime)}</span><span class="cell-secondary">script session</span></td><td class="trade-cell" title="${escapeHtml(itemTitle)}"><span class="cell-primary trade-state ${tradeClass}">${tradeLabelHtml}</span><span class="cell-secondary">${escapeHtml(details)}</span></td><td><span class="status-label ${escapeHtml(hopper.status)}">${escapeHtml(status)}</span></td><td><div class="row-actions"><button class="configure" data-hopper-action="rotation" data-hopper-id="${escapeHtml(hopper.id)}" title="Edit rotation" aria-label="Edit rotation">&#9881;</button><button class="play" data-hopper-action="start" data-hopper-id="${escapeHtml(hopper.id)}" title="Start hopper" aria-label="Start hopper">&#9654;</button><button class="stop" data-hopper-action="stop" data-hopper-id="${escapeHtml(hopper.id)}" title="Stop hopper" aria-label="Stop hopper">&#9632;</button><button class="restart" data-hopper-action="restart" data-hopper-id="${escapeHtml(hopper.id)}" title="Restart hopper" aria-label="Restart hopper">&#8635;</button></div></td></tr>`;
     }).join("");
   }
 
@@ -157,7 +165,6 @@
     $("rotation-subtitle").textContent = `Phone ${hopper.phone} · ${hopper.device}`;
     $("rotation-links").value = links.join("\n");
     $("rotation-loop").checked = rotation.loop !== false;
-    $("rotation-cooldown").value = Number(rotation.cooldown || 240);
     $("rotation-result").textContent = "";
     renderSavedRotation(hopper);
     $("rotation-dialog").showModal();
@@ -180,7 +187,6 @@
       hopper: hopper.hopper,
       links,
       loop: $("rotation-loop").checked,
-      cooldown: number("rotation-cooldown"),
     };
     busy = true;
     $("rotation-save").disabled = true;
@@ -197,7 +203,6 @@
         const savedRotation = saved.rotation || {};
         $("rotation-links").value = Array.isArray(savedRotation.links) ? savedRotation.links.join("\n") : "";
         $("rotation-loop").checked = savedRotation.loop !== false;
-        $("rotation-cooldown").value = Number(savedRotation.cooldown || 240);
         renderSavedRotation(saved);
       }
     } catch (error) {

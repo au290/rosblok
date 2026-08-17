@@ -523,9 +523,6 @@ def _hopper_rows(phone: str) -> list[dict]:
                 state = "running"
             else:
                 state = "starting"
-            progress = re.search(r"(\d+)\s*/\s*(\d+)s", tail)
-            elapsed = int(progress.group(1)) if progress else 0
-            total = int(progress.group(2)) if progress else 0
             key = f"{target_phone}:{number}"
             item = metadata.get(key, {})
             if not isinstance(item, dict):
@@ -539,14 +536,9 @@ def _hopper_rows(phone: str) -> list[dict]:
             links = rotation.get("links", [])
             if not isinstance(links, list):
                 links = []
-            try:
-                cooldown = max(3, min(int(rotation.get("cooldown", 240) or 240), 86400))
-            except (TypeError, ValueError):
-                cooldown = 240
             rotation = {
                 "links": [str(link) for link in links],
                 "loop": bool(rotation.get("loop", True)),
-                "cooldown": cooldown,
             }
             rotation_label = f"{len(rotation['links'])} saved server{'s' if len(rotation['links']) != 1 else ''}"
             trade = (report.get("trades") or {}).get(str(number), {})
@@ -557,6 +549,13 @@ def _hopper_rows(phone: str) -> list[dict]:
                 account = accounts.get(str(number)) or "-"
             if account == "-" and trade.get("file"):
                 account = re.sub(r"_winteraddons\.json$", "", trade["file"], flags=re.I)
+            meta = trade.get("meta") if isinstance(trade.get("meta"), dict) else {}
+            runtime = meta.get("runtime")
+            if (isinstance(runtime, bool) or not isinstance(runtime, (int, float))
+                    or not math.isfinite(runtime) or runtime < 0):
+                runtime = None
+            else:
+                runtime = int(runtime)
             rows.append({
                 "id": key,
                 "phone": target_phone,
@@ -568,8 +567,7 @@ def _hopper_rows(phone: str) -> list[dict]:
                 "server": server,
                 "rotation": rotation,
                 "trade": trade,
-                "elapsed": elapsed,
-                "total": total,
+                "runtime": runtime,
                 "status": state if online(target_phone) else "offline",
                 "online": online(target_phone),
             })
@@ -672,11 +670,8 @@ def _rotation_command(body: dict) -> str:
     loop = body.get("loop", True)
     if not isinstance(loop, bool):
         raise ValueError("loop must be true or false")
-    cooldown = _required_int(body, "cooldown", 3)
-    if cooldown > 86400:
-        raise ValueError("cooldown must be 86400 seconds or less")
     config = json.dumps(
-        {"links": clean_links, "loop": loop, "cooldown": cooldown},
+        {"links": clean_links, "loop": loop},
         separators=(",", ":"),
     )
     return f"rotation_set {hopper} {shlex.quote(config)}"
@@ -776,7 +771,7 @@ async def handle_asset(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(path)
 
 
-def create_app() -> web.Application:
+def create_app(_argv=None) -> web.Application:
     app = web.Application()
     app.router.add_get("/", handle_index)
     app.router.add_get("/assets/{name}", handle_asset)
