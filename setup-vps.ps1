@@ -86,7 +86,8 @@ $Files = @(
     "web/hoppers.example.json",
     "web/assets/index.html",
     "web/assets/app.js",
-    "web/assets/styles.css"
+    "web/assets/styles.css",
+    "web/assets/logo.png"
 )
 
 Write-Step "downloading web control plane into $InstallDir"
