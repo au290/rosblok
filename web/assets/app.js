@@ -298,6 +298,18 @@
     }
   }
 
+  async function restoreSession() {
+    try {
+      // The HttpOnly cookie is sent automatically; this avoids asking for the
+      // token again when the page is refreshed during the same server session.
+      await api("/api/status?phone=all");
+      showApp();
+      await refresh();
+    } catch (_) {
+      showLogin();
+    }
+  }
+
   async function sendCommand(action, extra = {}) {
     if (busy) return;
     busy = true;
@@ -358,5 +370,5 @@
   $("rotation-cancel").addEventListener("click", closeRotation);
   $("rotation-dialog").addEventListener("cancel", () => { rotationHopperId = null; });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => sendCommand(button.dataset.action, actionPayload(button.dataset.action))));
-  showLogin();
+  restoreSession();
 })();

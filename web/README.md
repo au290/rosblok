@@ -25,7 +25,8 @@ $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "
 The installer uses `$env:PANEN_DIR` when set and otherwise installs to
 `$env:USERPROFILE\panen`. Run PowerShell as Administrator to register an
 at-startup scheduled task; without elevation it installs a per-user Startup
-shortcut instead.
+shortcut instead. Credentials are preserved across reruns in `web/config.txt`
+and its local `.credentials` recovery file.
 
 ```powershell
 cd web

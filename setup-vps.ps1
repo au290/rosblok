@@ -10,6 +10,7 @@ $ProgressPreference = "SilentlyContinue"
 $Raw = "https://raw.githubusercontent.com/au290/rosblok/main"
 $WebDir = Join-Path $InstallDir "web"
 $ConfigPath = Join-Path $WebDir "config.txt"
+$CredentialPath = Join-Path $WebDir ".credentials"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Write-Step([string]$Message) {
@@ -75,6 +76,7 @@ if (-not $Python) {
 }
 
 Write-Step "using Python at $Python"
+Write-Step "persistent configuration: $ConfigPath"
 New-Item -ItemType Directory -Path (Join-Path $WebDir "assets") -Force | Out-Null
 
 $Files = @(
@@ -122,6 +124,33 @@ function Set-ConfigValue([string]$Name, [string]$Value) {
     [IO.File]::WriteAllLines($ConfigPath, [string[]]$output, $Utf8NoBom)
 }
 
+function Get-CredentialValue([string]$Name) {
+    if (-not (Test-Path -LiteralPath $CredentialPath)) { return "" }
+    $pattern = "^\s*" + [regex]::Escape($Name) + "\s*=(.*)$"
+    foreach ($line in [IO.File]::ReadAllLines($CredentialPath)) {
+        if ($line -match $pattern) { return $Matches[1].Trim() }
+    }
+    return ""
+}
+
+function Set-CredentialValue([string]$Name, [string]$Value) {
+    $pattern = "^\s*" + [regex]::Escape($Name) + "\s*="
+    $output = @()
+    $found = $false
+    if (Test-Path -LiteralPath $CredentialPath) {
+        foreach ($line in [IO.File]::ReadAllLines($CredentialPath)) {
+            if ($line -match $pattern) {
+                if (-not $found) { $output += "$Name=$Value" }
+                $found = $true
+            } else {
+                $output += $line
+            }
+        }
+    }
+    if (-not $found) { $output += "$Name=$Value" }
+    [IO.File]::WriteAllLines($CredentialPath, [string[]]$output, $Utf8NoBom)
+}
+
 function New-Secret {
     $bytes = New-Object byte[] 32
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -129,14 +158,21 @@ function New-Secret {
     return [Convert]::ToBase64String($bytes).TrimEnd("=").Replace("+", "-").Replace("/", "_")
 }
 
-$KeyValue = Get-ConfigValue "KEY"
-if ([string]::IsNullOrWhiteSpace($KeyValue) -or $KeyValue -eq "CHANGE_ME_SHARED_SECRET") {
-    Set-ConfigValue "KEY" (New-Secret)
+function Ensure-Secret([string]$Name, [string]$Placeholder) {
+    $value = Get-ConfigValue $Name
+    if ([string]::IsNullOrWhiteSpace($value) -or $value -eq $Placeholder) {
+        $value = Get-CredentialValue $Name
+    }
+    if ([string]::IsNullOrWhiteSpace($value) -or $value -eq $Placeholder) {
+        $value = New-Secret
+    }
+    Set-ConfigValue $Name $value
+    Set-CredentialValue $Name $value
+    return $value
 }
-$TokenValue = Get-ConfigValue "WEB_TOKEN"
-if ([string]::IsNullOrWhiteSpace($TokenValue) -or $TokenValue -eq "CHANGE_ME_WEB_TOKEN") {
-    Set-ConfigValue "WEB_TOKEN" (New-Secret)
-}
+
+$KeyValue = Ensure-Secret "KEY" "CHANGE_ME_SHARED_SECRET"
+$TokenValue = Ensure-Secret "WEB_TOKEN" "CHANGE_ME_WEB_TOKEN"
 if ([string]::IsNullOrWhiteSpace((Get-ConfigValue "HOST"))) { Set-ConfigValue "HOST" "0.0.0.0" }
 if ([string]::IsNullOrWhiteSpace((Get-ConfigValue "PORT"))) { Set-ConfigValue "PORT" "8090" }
 

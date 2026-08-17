@@ -1,4 +1,5 @@
 config.txt
 web_token.txt
+.credentials
 hoppers.json
 __pycache__/

@@ -65,9 +65,12 @@ def load_config() -> None:
             elif name == "GRACE" and value:
                 GRACE = int(value)
 
+    # config.txt is the installer's source of truth. Keep the legacy token file
+    # as a fallback for older installs that still use it with a placeholder config.
     token_file = BASE_DIR / "web_token.txt"
-    if token_file.exists() and token_file.read_text(encoding="utf-8").strip():
-        WEB_TOKEN = token_file.read_text(encoding="utf-8").strip()
+    token_value = token_file.read_text(encoding="utf-8").strip() if token_file.exists() else ""
+    if token_value and WEB_TOKEN.startswith("CHANGE_ME"):
+        WEB_TOKEN = token_value
 
 
 load_config()

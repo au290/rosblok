@@ -44,7 +44,9 @@ pkg upgrade -y && curl -fsSL https://raw.githubusercontent.com/au290/rosblok/mai
 The VPS installer prints the generated phone `KEY` and browser `WEB_TOKEN` at
 the end. Put the phone key in the Termux prompts/config; use the browser token
 only for dashboard login. Re-running either installer updates the code while
-preserving existing configuration and secrets.
+preserving existing configuration and secrets. The Windows installer also keeps
+a local credential backup beside `web/config.txt`, so a rerun does not rotate
+the key or token if the config file was accidentally removed.
 
 ## Phone Agent
 
