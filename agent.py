@@ -1,10 +1,9 @@
 """
-agent.py — phone side. Headless worker that polls the VPS (server.py) for jobs,
-runs them locally via tmux (exactly like master_bot.py used to), and reports status
-back. NO Discord token lives on the phone anymore — the token is only on the VPS.
+agent.py — phone side. Headless worker that polls the web server for jobs,
+launches one Roblox Android package per hopper, and reports status back. It does
+not require tmux or dedicated hopperN.lua processes.
 
 Run on the phone (Termux):
-    pip install -U discord.py   # not needed here; only stdlib is used
     python agent.py
 
 Config: edit the CONFIG block, or drop a config.txt next to this file (gitignored)
@@ -13,39 +12,61 @@ with lines like  VPS_URL=https://your.vps:8080  /  KEY=...  /  PHONE=A  /  HOPPE
 
 import re
 import json
+import math
 import time
 import shlex
+import os
 import threading
 import subprocess
 import urllib.request
 from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlparse
+from collections import deque
 
 # ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
 VPS_URL  = "http://YOUR_VPS_IP:8080"   # where server.py listens
 KEY      = "CHANGE_ME_SHARED_SECRET"   # must match server.py KEY
 PHONE    = "A"                          # this phone's id ("A" / "B")
-LUA      = "lua"                        # "lua5.4" if `which lua` shows that
-SESSION  = "farm"                       # tmux session name
 HOPPERS  = [1, 2, 3, 4, 5]              # this phone's hoppers
 INTERVAL = 2                            # seconds between polls
+PLACE_ID = "920587237"                 # fallback when a share URL omits the place
+WINDOW_MODE = "auto"                    # detect freeform support, otherwise use Android's default
+START_ON_BOOT = False                   # preserve the old explicit-start behavior
+AUTO_DETECT_PACKAGES = True             # discover cloned com.roblox.* packages
+PACKAGES = []                           # optional ordered package list
+PACKAGE_OVERRIDES = {}                  # optional PACKAGE_1=... entries
 # ───────────────────────────────────────────────────────────────────────────
 
-# Single home on shared storage, managed by hand in the file manager: this holds
-# EVERYTHING — config.txt, hopper*.lua, cmd/, logs, link.txt, servers.txt.
-# (Hardcoded, not derived from __file__, so it works no matter where you launch from.)
+# Single home on shared storage, managed by hand in the file manager. Rotation,
+# logs, and the optional legacy link files remain device-persistent.
 BASE_DIR = Path("/storage/emulated/0/Download")
 RUN_DIR  = BASE_DIR
-LUA_CMDS = {"lua", "lua5.4", "lua5.3", "luajit"}
-# a running hopper spends most of its time in os.execute("sleep 3") / am / su (not lua), so the
-# pane's current command is usually one of these — count them all as "running" (idle = bash).
-RUNNING_CMDS = LUA_CMDS | {"sleep", "am", "su"}
-# Delta executor paths (its own app storage — not the Termux sandbox).
+# Executor paths (their own app storage — not the Termux sandbox).
 INV_DIR  = Path("/storage/emulated/0/Arceus X/Workspace/inv")
 AUTOEXEC = Path("/storage/emulated/0/Arceus X/Autoexecute")
+
+# Swap/Trade addons write one heartbeat file per Roblox account.  Delta normally
+# exposes this directory, while cloned Roblox packages may keep an executor
+# workspace in their private files directory.  The watcher checks both without
+# requiring any addon changes.
+TRADE_DIRS = [
+    INV_DIR,
+    Path("/storage/emulated/0/Delta/Workspace/inv"),
+    Path("/storage/emulated/0/Delta/Workspace"),
+    BASE_DIR,
+    AUTOEXEC,
+    Path("/storage/emulated/0/Delta/Autoexecute"),
+]
+TRADE_STALE_SECONDS = 40
+TRADE_LAUNCH_GRACE = 45
+TRADE_RETRY_COOLDOWN = 10
 
 DATA_DIR  = RUN_DIR
 MAP_FILE  = DATA_DIR / "servers.txt"
 POOL_FILE = DATA_DIR / "link.txt"
+ROTATION_FILE = DATA_DIR / "rotations.json"
+ROTATION_DIR = DATA_DIR / "rotations"
+DEFAULT_COOLDOWN = 240
 
 # config.txt (gitignored) overrides the CONFIG block above
 _cfg = BASE_DIR / "config.txt"
@@ -56,66 +77,572 @@ if _cfg.exists():
             if   _k == "VPS_URL" and _v: VPS_URL = _v
             elif _k == "KEY"     and _v: KEY = _v
             elif _k == "PHONE"   and _v: PHONE = _v
-            elif _k == "LUA"     and _v: LUA = _v
-            elif _k == "SESSION" and _v: SESSION = _v
             elif _k == "HOPPERS" and _v: HOPPERS = [int(x) for x in _v.split(",") if x.strip()]
+            elif _k == "PLACE_ID" and _v: PLACE_ID = _v
+            elif _k == "WINDOW_MODE" and _v:
+                if _v.lower() in {"auto", "default"}:
+                    WINDOW_MODE = "auto"
+                elif _v.lower() in {"none", "off"}:
+                    WINDOW_MODE = None
+                else:
+                    try: WINDOW_MODE = int(_v)
+                    except ValueError: pass
+            elif _k == "START_ON_BOOT": START_ON_BOOT = _v.lower() in {"1", "true", "yes", "on"}
+            elif _k == "AUTO_DETECT_PACKAGES": AUTO_DETECT_PACKAGES = _v.lower() in {"1", "true", "yes", "on"}
+            elif _k == "PACKAGES": PACKAGES = [x.strip() for x in _v.split(",") if x.strip()]
+            elif _k == "TRADE_DIRS":
+                TRADE_DIRS = [Path(x.strip()) for x in _v.split(",") if x.strip()]
+            elif _k == "TRADE_STALE_SECONDS":
+                try: TRADE_STALE_SECONDS = max(10, int(_v))
+                except ValueError: pass
+            elif _k == "TRADE_LAUNCH_GRACE":
+                try: TRADE_LAUNCH_GRACE = max(5, int(_v))
+                except ValueError: pass
+            elif _k.startswith("PACKAGE_"):
+                try:
+                    PACKAGE_OVERRIDES[int(_k[8:])] = _v
+                except ValueError:
+                    pass
 
 
-# ─────────────────────────── tmux / hopper control ───────────────────────────
-def tmux(*args):
-    return subprocess.run(["tmux", *args], cwd=str(BASE_DIR), capture_output=True, text=True, errors="replace")
+# ─────────────────────────── direct Android hopper control ───────────────────
+_RUNTIME_LOCK = threading.RLock()
+_RUNTIMES = {}
+_DETECTED_PACKAGES = None
+_WINDOW_MODE_READY = False
+_DETECTED_WINDOW_MODE = None
+_TRADE_FILE_CACHE: dict[str, tuple[float, list[Path]]] = {}
+_PACKAGE_RE = re.compile(r"^[A-Za-z0-9_.]+$")
 
 
-def session_exists() -> bool:
-    return tmux("has-session", "-t", SESSION).returncode == 0
+def detect_packages(refresh: bool = False) -> list[str]:
+    """Return installed Roblox clone package IDs, if root/pm is available."""
+    global _DETECTED_PACKAGES
+    if _DETECTED_PACKAGES is not None and not refresh:
+        return list(_DETECTED_PACKAGES)
+    found = []
+    try:
+        result = subprocess.run(
+            ["su", "-c", "pm list packages"], capture_output=True, text=True,
+            errors="replace", timeout=8,
+        )
+        for line in result.stdout.splitlines():
+            package = line.strip().removeprefix("package:")
+            if "roblox" in package.lower() and _PACKAGE_RE.fullmatch(package):
+                found.append(package)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _DETECTED_PACKAGES = sorted(set(found))
+    return list(_DETECTED_PACKAGES)
 
 
-def windows() -> set:
-    if not session_exists():
-        return set()
-    return set(tmux("list-windows", "-t", SESSION, "-F", "#{window_name}").stdout.split())
+def package_for(n: int, refresh: bool = False) -> str:
+    package = PACKAGE_OVERRIDES.get(n)
+    if package:
+        return package
+    try:
+        slot = HOPPERS.index(n)
+    except ValueError:
+        slot = n - 1
+    configured = [p for p in PACKAGES if _PACKAGE_RE.fullmatch(p)]
+    if 0 <= slot < len(configured):
+        return configured[slot]
+    detected = detect_packages(refresh=refresh) if AUTO_DETECT_PACKAGES else []
+    if 0 <= slot < len(detected):
+        return detected[slot]
+    return ""
 
 
-def tgt(n: int) -> str:
-    return f"{SESSION}:h{n}"
+def resolved_window_mode() -> int | None:
+    """Use freeform when Android advertises it; otherwise let Android decide."""
+    global _WINDOW_MODE_READY, _DETECTED_WINDOW_MODE
+    if isinstance(WINDOW_MODE, int):
+        return WINDOW_MODE if WINDOW_MODE >= 0 else None
+    if WINDOW_MODE is None or str(WINDOW_MODE).lower() != "auto":
+        return None
+    if _WINDOW_MODE_READY:
+        return _DETECTED_WINDOW_MODE
+
+    feature = _su("pm has-feature android.software.freeform_window_management", timeout=8)
+    setting = _su("settings get global enable_freeform_support", timeout=8)
+    has_feature = bool(
+        feature and feature.returncode == 0
+        and feature.stdout.strip().lower() in {"1", "true", "yes"}
+    )
+    enabled = bool(setting and setting.returncode == 0 and setting.stdout.strip() == "1")
+    _DETECTED_WINDOW_MODE = 5 if has_feature or enabled else None
+    _WINDOW_MODE_READY = True
+    return _DETECTED_WINDOW_MODE
+
+
+def _runtime(n: int) -> dict:
+    with _RUNTIME_LOCK:
+        state = _RUNTIMES.get(n)
+        if state is None:
+            state = {
+                "hopper": n, "package": package_for(n), "desired": False,
+                "actual": False, "held": False, "index": None,
+                "link": "", "deep_link": "", "next_at": 0.0,
+                "last_launch": 0.0, "last_health": 0.0,
+                "trade": None, "trade_launch_at": 0.0,
+                "trade_retry_at": 0.0, "trade_file": "",
+                "logs": deque(maxlen=80),
+            }
+            log_file = RUN_DIR / f"hopper{n}.log"
+            try:
+                state["logs"].extend(log_file.read_text(errors="replace").splitlines()[-80:])
+            except OSError:
+                pass
+            _RUNTIMES[n] = state
+        return state
+
+
+def _log(state: dict, message: str) -> None:
+    line = f"[{time.strftime('%H:%M:%S')}] [{state['package'] or 'unassigned'}] {message}"
+    state["logs"].append(line)
+    try:
+        with (RUN_DIR / f"hopper{state['hopper']}.log").open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
+    print(f"[hopper{state['hopper']}] {message}", flush=True)
+
+
+def _su(command: str, timeout: int = 15):
+    try:
+        return subprocess.run(["su", "-c", command], capture_output=True, text=True,
+                              errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def app_running(package: str) -> bool:
+    if not _PACKAGE_RE.fullmatch(package):
+        return False
+    result = _su(f"pidof {shlex.quote(package)}", timeout=8)
+    return bool(result and result.returncode == 0 and result.stdout.strip())
+
+
+_TRADE_FILE_RE = re.compile(r"^[^/\\]+_winteraddons\.json$", re.I)
+
+
+def _trade_dirs_for(state: dict) -> list[Path]:
+    """Return package-private locations first, then shared executor folders."""
+    dirs: list[Path] = []
+    package = state.get("package", "")
+    if _PACKAGE_RE.fullmatch(package or ""):
+        for root in (Path("/data/data"), Path("/data/user/0"),
+                     Path("/storage/emulated/0/Android/data")):
+            dirs.extend((root / package / "files" / name for name in (
+                "", "Workspace", "workspace", "Delta/Workspace", "Delta/workspace",
+            )))
+    dirs.extend(Path(item) for item in TRADE_DIRS)
+    result: list[Path] = []
+    seen: set[str] = set()
+    for directory in dirs:
+        key = str(directory)
+        if key not in seen:
+            seen.add(key)
+            result.append(directory)
+    return result
+
+
+def _trade_files(directory: Path) -> list[Path]:
+    """List heartbeat files even when Termux needs root to read the folder."""
+    cache_key = str(directory)
+    cached = _TRADE_FILE_CACHE.get(cache_key)
+    if cached and time.monotonic() - cached[0] < 10:
+        return list(cached[1])
+    found: list[Path] = []
+    try:
+        found.extend(path for path in directory.glob("*_winteraddons.json")
+                     if path.is_file() and _TRADE_FILE_RE.fullmatch(path.name))
+    except OSError:
+        pass
+    if found:
+        _TRADE_FILE_CACHE[cache_key] = (time.monotonic(), found)
+        return found
+    result = _su(
+        f"find {shlex.quote(str(directory))} -maxdepth 1 -type f "
+        "-name '*_winteraddons.json' -print",
+        timeout=8,
+    )
+    if result and result.returncode == 0:
+        for raw in result.stdout.splitlines():
+            path = Path(raw.strip())
+            if _TRADE_FILE_RE.fullmatch(path.name):
+                found.append(path)
+    _TRADE_FILE_CACHE[cache_key] = (time.monotonic(), found)
+    return found
+
+
+def _read_trade_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        result = _su(f"cat {shlex.quote(str(path))}", timeout=8)
+        if result and result.returncode == 0:
+            return result.stdout
+    return None
+
+
+def _normalise_trade(raw: object, path: Path, now: float) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    status = raw.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return None
+    try:
+        timestamp = float(raw.get("ts"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(timestamp):
+        return None
+    age = max(0.0, now - timestamp)
+    result = {
+        "status": status.strip().lower()[:40],
+        "ts": int(timestamp) if timestamp.is_integer() else timestamp,
+        "age": round(age, 1),
+        "fresh": age <= TRADE_STALE_SECONDS,
+        "file": path.name,
+    }
+    if "count" in raw:
+        try:
+            count = float(raw["count"])
+            if math.isfinite(count) and count >= 0:
+                result["count"] = int(count) if count.is_integer() else count
+        except (TypeError, ValueError):
+            pass
+    items = raw.get("items")
+    if isinstance(items, list):
+        clean_items = []
+        for item in items[:100]:
+            if not isinstance(item, dict) or not str(item.get("name", "")).strip():
+                continue
+            clean = {"name": str(item["name"]).strip()[:160]}
+            try:
+                qty = float(item.get("qty", 0))
+                if math.isfinite(qty) and qty >= 0:
+                    clean["qty"] = int(qty) if qty.is_integer() else qty
+            except (TypeError, ValueError):
+                clean["qty"] = 0
+            clean_items.append(clean)
+        result["items"] = clean_items
+    meta = raw.get("meta")
+    if isinstance(meta, dict):
+        clean_meta = {}
+        for key, value in list(meta.items())[:40]:
+            key = str(key).strip()[:80]
+            if not key:
+                continue
+            if key == "categories" and isinstance(value, dict):
+                categories = {}
+                for name, count in list(value.items())[:40]:
+                    try:
+                        count = float(count)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(count) and count >= 0:
+                        categories[str(name).strip()[:80]] = int(count) if count.is_integer() else count
+                clean_meta[key] = categories
+                continue
+            if isinstance(value, (dict, list)):
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                if isinstance(value, float) and not math.isfinite(value):
+                    continue
+                clean_meta[key] = str(value)[:160] if isinstance(value, str) else value
+        result["meta"] = clean_meta
+    return result
+
+
+def read_trade_status(state: dict, now: float | None = None) -> dict | None:
+    """Read the newest valid heartbeat for this hopper without persisting it."""
+    now = time.time() if now is None else now
+    directories = _trade_dirs_for(state)
+    package_files: list[Path] = []
+    shared_files: list[Path] = []
+    shared_roots = {str(Path(item)) for item in TRADE_DIRS}
+    for directory in directories:
+        files = _trade_files(directory)
+        if str(directory) in shared_roots:
+            shared_files.extend(files)
+        else:
+            package_files.extend(files)
+    files = package_files or shared_files
+    candidates: list[tuple[dict, Path]] = []
+    seen: set[str] = set()
+    for path in files:
+        if str(path) in seen:
+            continue
+        seen.add(str(path))
+        text = _read_trade_text(path)
+        if not text:
+            continue
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        status = _normalise_trade(parsed, path, now)
+        if status:
+            candidates.append((status, path))
+    if not candidates:
+        return None
+    current_file = state.get("trade_file", "")
+    for status, path in candidates:
+        if current_file and str(path) == current_file:
+            return status
+    assigned = {
+        other.get("trade_file", "")
+        for other in _RUNTIMES.values()
+        if other is not state and other.get("desired")
+    }
+    available = [item for item in candidates if str(item[1]) not in assigned] or candidates
+    status, path = max(available, key=lambda item: float(item[0].get("ts", 0)))
+    state["trade_file"] = str(path)
+    return status
+
+
+def _refresh_trade_locked(state: dict, now: float | None = None) -> dict | None:
+    trade = read_trade_status(state, now)
+    launched = state.get("trade_launch_at") or state.get("last_launch") or 0
+    # A heartbeat from before this launch belongs to the server we just left.
+    # os.time() is second-resolution, so a new session may need one heartbeat
+    # interval before its timestamp becomes newer than the Python launch time.
+    if trade is not None and launched and float(trade.get("ts", 0)) < launched:
+        trade = dict(trade)
+        trade["fresh"] = False
+        trade["previous_session"] = True
+    state["trade"] = trade
+    return trade
+
+
+def _trade_needs_retry(state: dict, trade: dict | None, now: float) -> bool:
+    if now < state.get("trade_retry_at", 0):
+        return False
+    if trade and trade.get("fresh"):
+        return str(trade.get("status", "")).lower() in {"disconnected", "error"}
+    launched = state.get("trade_launch_at") or state.get("last_launch") or now
+    return now - launched >= TRADE_LAUNCH_GRACE
+
+
+def parse_private_server(link: str) -> tuple[str, str]:
+    """Extract a place and private-server code from Roblox/share URLs."""
+    raw = str(link or "").strip()
+    parsed = urlparse(raw)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    place_match = re.search(r"/(?:games|place)/(\d+)", parsed.path, re.I)
+    place = (place_match.group(1) if place_match else "")
+    for key in ("placeId", "placeid", "place_id"):
+        if query.get(key):
+            place = query[key][0]
+            break
+    code = ""
+    for key in ("privateServerLinkCode", "linkCode", "code"):
+        if query.get(key):
+            code = query[key][0]
+            break
+    if not place:
+        place = str(PLACE_ID).strip()
+    if not place or not re.fullmatch(r"\d+", place):
+        raise ValueError("Roblox link is missing a numeric place ID")
+    if not code:
+        raise ValueError("Roblox link is missing a private-server link code")
+    return place, code
+
+
+def deep_link(link: str) -> str:
+    raw = str(link or "").strip()
+    if raw.lower().startswith("roblox://"):
+        # Roblox deep links use '&' directly after the scheme, without '?'.
+        place_match = re.search(r"(?:^|[?&/])placeId=(\d+)", raw, re.I)
+        code_match = re.search(r"(?:^|[?&])(?:linkCode|privateServerLinkCode|code)=([A-Za-z0-9_-]+)", raw, re.I)
+        place = place_match.group(1) if place_match else str(PLACE_ID)
+        code = unquote(code_match.group(1)) if code_match else ""
+        if place and code:
+            return f"roblox://placeId={quote(place, safe='')}&linkCode={quote(code, safe='')}"
+    place, code = parse_private_server(raw)
+    return f"roblox://placeId={quote(place, safe='')}&linkCode={quote(code, safe='')}"
+
+
+def _launch_locked(state: dict, link: str, index: int | None = None, label: str = "") -> None:
+    target = deep_link(link)
+    package = state["package"]
+    if not _PACKAGE_RE.fullmatch(package or ""):
+        package = package_for(state["hopper"], refresh=True)
+        state["package"] = package
+    if not _PACKAGE_RE.fullmatch(package or ""):
+        detected = detect_packages() if AUTO_DETECT_PACKAGES else []
+        raise ValueError(
+            f"no installed Roblox package detected for hopper{state['hopper']} "
+            f"({len(detected)} package(s) found for {len(HOPPERS)} hopper(s))"
+        )
+    for other in _RUNTIMES.values():
+        if other is not state and other.get("desired") and other.get("package") == package:
+            raise ValueError(f"{package} is already assigned to hopper{other['hopper']}")
+    stopped = _su(f"am force-stop {shlex.quote(package)}", timeout=15)
+    if stopped is None:
+        raise RuntimeError("su is unavailable")
+    if stopped.returncode == 0:
+        state["actual"] = False
+    time.sleep(0.5)
+    command = (f"am start -a android.intent.action.VIEW -d {shlex.quote(target)} "
+               f"-p {shlex.quote(package)}")
+    window_mode = resolved_window_mode()
+    if window_mode is not None:
+        command += f" --windowingMode {window_mode}"
+    result = _su(command, timeout=20)
+    if result is None:
+        raise RuntimeError("su is unavailable")
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "am start failed").strip())
+    launched_at = time.time()
+    state.update({"actual": True, "link": str(link).strip(), "deep_link": target,
+                  "last_launch": launched_at, "last_health": launched_at,
+                  "trade": None, "trade_launch_at": launched_at,
+                  "trade_retry_at": 0.0})
+    if index is not None:
+        state["index"] = index
+    rotation = ensure_rotations().get(str(state["hopper"]), {})
+    state["next_at"] = time.time() + int(rotation.get("cooldown", DEFAULT_COOLDOWN))
+    _log(state, f"Launching {label or ('RF' + str((state['index'] or 0) + 1))}: {target}")
+
+
+def _launch_index_locked(state: dict, index: int) -> None:
+    links = hopper_links(state["hopper"])
+    if not links:
+        raise ValueError(f"hopper{state['hopper']} has no saved servers")
+    if not 0 <= index < len(links):
+        raise ValueError(f"hopper{state['hopper']} has no RF{index + 1} (has RF1..RF{len(links)})")
+    _launch_locked(state, links[index], index=index)
 
 
 def is_running(n: int) -> bool:
-    if f"h{n}" not in windows():
-        return False
-    r = tmux("display-message", "-p", "-t", tgt(n), "#{pane_current_command}")
-    return r.stdout.strip() in RUNNING_CMDS   # lua OR its sleep/am/su children (idle window = bash)
-
-
-def ensure_window(n: int):
-    if not session_exists():
-        tmux("new-session", "-d", "-s", SESSION, "-n", f"h{n}")
-    elif f"h{n}" not in windows():
-        tmux("new-window", "-d", "-t", SESSION, "-n", f"h{n}")
+    return bool(_runtime(n).get("actual"))
 
 
 def start_hopper(n: int) -> str:
-    if is_running(n):
-        return f"hopper{n} already running"
-    if not (RUN_DIR / f"hopper{n}.lua").exists():
-        return f"hopper{n}.lua not found in {RUN_DIR}"
-    ensure_window(n)
-    tmux("send-keys", "-t", tgt(n), f"cd '{RUN_DIR}' && {LUA} hopper{n}.lua", "Enter")
-    return f"started hopper{n}"
+    state = _runtime(n)
+    with _RUNTIME_LOCK:
+        if state["desired"] and (state["actual"] or time.time() - state["last_launch"] < 5):
+            return f"hopper{n} already running ({state['package']})"
+        links = hopper_links(n)
+        if not links:
+            return f"hopper{n} has no saved servers"
+        previous_desired = state["desired"]
+        previous_held = state["held"]
+        state["desired"] = True
+        state["held"] = False
+        index = state["index"] if state["index"] is not None and state["index"] < len(links) else 0
+        try:
+            _launch_index_locked(state, index)
+        except Exception as exc:
+            state["desired"] = previous_desired
+            state["held"] = previous_held
+            _log(state, f"launch failed: {exc}")
+            return f"hopper{n} launch failed: {exc}"
+    return f"started hopper{n} ({state['package']})"
 
 
 def stop_hopper(n: int) -> str:
-    if f"h{n}" not in windows():
-        return f"hopper{n} not started"
-    tmux("send-keys", "-t", tgt(n), "C-c")
-    return f"stopped hopper{n}"
+    state = _runtime(n)
+    with _RUNTIME_LOCK:
+        was_running = state["desired"] or state["actual"]
+        state["desired"] = False
+        state["held"] = False
+        package = state["package"]
+        _su(f"am force-stop {shlex.quote(package)}", timeout=15)
+        state["actual"] = False
+        state["next_at"] = 0
+        state["trade"] = None
+        state["trade_launch_at"] = 0
+        state["trade_retry_at"] = 0
+        _log(state, "stopped")
+    return f"stopped hopper{n}" if was_running else f"hopper{n} not started"
 
 
 def pane_tail(n: int, lines: int = 1) -> str:
-    if f"h{n}" not in windows():
-        return "—"
-    rows = [l for l in tmux("capture-pane", "-p", "-t", tgt(n)).stdout.splitlines() if l.strip()]
-    return "\n".join(rows[-lines:]) if rows else "—"
+    state = _runtime(n)
+    with _RUNTIME_LOCK:
+        rows = list(state["logs"])[-max(1, lines):]
+    return "\n".join(rows) if rows else "—"
+
+
+def tick_hoppers() -> None:
+    """Drive each rotation from the addon's trade heartbeat."""
+    now = time.time()
+    with _RUNTIME_LOCK:
+        for n in HOPPERS:
+            state = _runtime(n)
+            if not state["desired"]:
+                continue
+            links = hopper_links(n)
+            if not links:
+                if state["actual"]:
+                    _su(f"am force-stop {shlex.quote(state['package'])}", timeout=15)
+                state["desired"] = False
+                state["actual"] = False
+                state["index"] = None
+                _log(state, "stopped: rotation has no servers")
+                continue
+            try:
+                trade = _refresh_trade_locked(state, now)
+                if state["held"]:
+                    if _trade_needs_retry(state, trade, now):
+                        reason = "no script" if trade is None else (
+                            "stale script" if not trade.get("fresh") else trade.get("status", "error")
+                        )
+                        state["trade_retry_at"] = now + TRADE_RETRY_COOLDOWN
+                        _log(state, f"{reason}; relaunching pinned server")
+                        _launch_locked(state, state["link"], index=state.get("index"), label="PIN")
+                    elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
+                        state["actual"] = app_running(state["package"])
+                        state["last_health"] = now
+                        if not state["actual"]:
+                            _launch_locked(state, state["link"], label="PIN")
+                    continue
+                if state["index"] is None:
+                    _launch_index_locked(state, 0)
+                    continue
+
+                status = str((trade or {}).get("status", "")).lower()
+                if trade and trade.get("fresh") and status == "completed":
+                    rotation = _normalise_rotation(ensure_rotations().get(str(n), {}))
+                    next_index = state["index"] + 1
+                    if next_index >= len(links):
+                        if not rotation["loop"]:
+                            state["desired"] = False
+                            state["actual"] = False
+                            _su(f"am force-stop {shlex.quote(state['package'])}", timeout=15)
+                            _log(state, "rotation complete")
+                            continue
+                        next_index = 0
+                    _log(state, f"trade completed; advancing to RF{next_index + 1}")
+                    _launch_index_locked(state, next_index)
+                elif _trade_needs_retry(state, trade, now):
+                    reason = "no script" if trade is None else (
+                        "stale script" if not trade.get("fresh") else status
+                    )
+                    state["trade_retry_at"] = now + TRADE_RETRY_COOLDOWN
+                    _log(state, f"{reason}; relaunching RF{state['index'] + 1}")
+                    _launch_index_locked(state, state["index"])
+                elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
+                    state["actual"] = app_running(state["package"])
+                    state["last_health"] = now
+                    if not state["actual"]:
+                        _launch_index_locked(state, state["index"] or 0)
+            except Exception as exc:
+                state["actual"] = False
+                _log(state, f"runtime error: {exc}")
+
+
+def runtime_worker() -> None:
+    while True:
+        try:
+            tick_hoppers()
+        except Exception as exc:
+            print(f"[agent {PHONE}] hopper worker error: {exc}", flush=True)
+        time.sleep(2)
 
 
 # ─────────────────────────── data / cmd files ───────────────────────────
@@ -141,23 +668,192 @@ def set_range(n: int, first: int, last: int):
     body = ["# hopper : firstLink-lastLink  (line numbers in link.txt, 1-based)"]
     body += [f"{k}: {d[k][0]}-{d[k][1]}" for k in sorted(d)]
     MAP_FILE.write_text("\n".join(body) + "\n")
+    if ROTATION_FILE.exists():
+        current = load_rotations().get(str(n), {})
+        current["links"] = pool()[first - 1:last]
+        set_rotation(n, current)
 
 
-def hopper_links(n: int) -> list:
+def legacy_hopper_links(n: int) -> list:
     first, last = ranges().get(n, (1, 0))
     return pool()[first - 1:last]
 
 
-def write_cmd(n: int, c: str):
-    d = RUN_DIR / "cmd"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"h{n}.txt").write_text(c)
+def _normalise_rotation(value) -> dict:
+    if not isinstance(value, dict):
+        value = {}
+    links = value.get("links", [])
+    if not isinstance(links, list):
+        links = []
+    links = [str(link).strip() for link in links if str(link).strip()]
+    try:
+        cooldown = int(value.get("cooldown", DEFAULT_COOLDOWN))
+    except (TypeError, ValueError):
+        cooldown = DEFAULT_COOLDOWN
+    cooldown = max(3, min(cooldown, 86400))
+    return {"links": links[:100], "loop": bool(value.get("loop", True)), "cooldown": cooldown}
 
 
-def clear_cmd(n: int):
-    f = RUN_DIR / "cmd" / f"h{n}.txt"
-    if f.exists():
-        f.unlink()
+def load_rotations() -> dict:
+    if not ROTATION_FILE.exists():
+        return {}
+    try:
+        raw = json.loads(ROTATION_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): _normalise_rotation(value) for key, value in raw.items()}
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _write_rotation_files(rotations: dict) -> None:
+    ROTATION_DIR.mkdir(parents=True, exist_ok=True)
+    for key, value in rotations.items():
+        try:
+            hopper = int(key)
+        except (TypeError, ValueError):
+            continue
+        data = _normalise_rotation(value)
+        header = f"# cooldown={data['cooldown']} loop={'true' if data['loop'] else 'false'}\n"
+        body = header + "".join(f"{link}\n" for link in data["links"])
+        _atomic_write(ROTATION_DIR / f"h{hopper}.txt", body)
+
+
+def _rebuild_legacy_files(rotations: dict) -> None:
+    """Keep old hopper scripts working while the device upgrades to rotation files."""
+    links: list[str] = []
+    ranges_body = ["# hopper : firstLink-lastLink  (line numbers in link.txt, 1-based)"]
+    keys = sorted((int(key), value) for key, value in rotations.items() if str(key).isdigit())
+    for hopper, value in keys:
+        hopper_links = _normalise_rotation(value)["links"]
+        first = len(links) + 1
+        links.extend(hopper_links)
+        ranges_body.append(f"{hopper}: {first}-{len(links)}")
+    _atomic_write(POOL_FILE, "".join(f"{link}\n" for link in links))
+    _atomic_write(MAP_FILE, "\n".join(ranges_body) + "\n")
+
+
+def ensure_rotations() -> dict:
+    """Migrate the legacy pool once, then keep all rotation state on-device."""
+    rotations = load_rotations()
+    if rotations:
+        runtime_missing = any(not (ROTATION_DIR / f"h{key}.txt").exists() for key in rotations)
+        if runtime_missing or not POOL_FILE.exists() or not MAP_FILE.exists():
+            try:
+                _write_rotation_files(rotations)
+                _rebuild_legacy_files(rotations)
+            except OSError:
+                pass
+        return rotations
+    rotations = {
+        str(n): {"links": legacy_hopper_links(n), "loop": True, "cooldown": DEFAULT_COOLDOWN}
+        for n in HOPPERS
+    }
+    try:
+        _atomic_write(ROTATION_FILE, json.dumps(rotations, separators=(",", ":"), sort_keys=True))
+        _write_rotation_files(rotations)
+        _rebuild_legacy_files(rotations)
+    except OSError:
+        # The agent can still operate with the legacy files while storage is unavailable.
+        pass
+    return rotations
+
+
+def rotation_snapshot() -> dict:
+    return ensure_rotations()
+
+
+def hopper_links(n: int) -> list:
+    rotation = ensure_rotations().get(str(n))
+    if rotation is not None:
+        return list(rotation.get("links", []))
+    return legacy_hopper_links(n)
+
+
+def set_rotation(n: int, value: dict) -> str:
+    if n < 1:
+        raise ValueError("hopper must be at least 1")
+    rotations = ensure_rotations()
+    rotations[str(n)] = _normalise_rotation(value)
+    _atomic_write(ROTATION_FILE, json.dumps(rotations, separators=(",", ":"), sort_keys=True))
+    _write_rotation_files({str(n): rotations[str(n)]})
+    _rebuild_legacy_files(rotations)
+    links = rotations[str(n)]["links"]
+    state = _RUNTIMES.get(n)
+    if state is not None:
+        with _RUNTIME_LOCK:
+            current = state.get("link", "")
+            if current in links:
+                state["index"] = links.index(current)
+                state["next_at"] = time.time() + rotations[str(n)]["cooldown"]
+            else:
+                state["index"] = None
+                if state.get("desired") and not state.get("held"):
+                    state["next_at"] = 0
+    mode = "looping" if rotations[str(n)]["loop"] else "one-shot"
+    return f"saved hopper{n} rotation: {len(links)} server(s), {mode}, {rotations[str(n)]['cooldown']}s cooldown"
+
+
+def goto_hopper(n: int, server: int, hold: bool = False) -> str:
+    state = _runtime(n)
+    links = hopper_links(n)
+    if not (1 <= server <= len(links)):
+        return f"hopper{n} has no RF{server} (has RF1..RF{len(links)})"
+    with _RUNTIME_LOCK:
+        previous_desired = state["desired"]
+        previous_held = state["held"]
+        state["desired"] = True
+        state["held"] = hold
+        try:
+            _launch_index_locked(state, server - 1)
+        except Exception as exc:
+            state["desired"] = previous_desired
+            state["held"] = previous_held
+            return f"hopper{n} launch failed: {exc}"
+    if hold:
+        return f"hopper{n} pinned to RF{server}, holding (/continue to release)"
+    return f"hopper{n} → RF{server}"
+
+
+def pin_hopper(n: int, link: str) -> str:
+    state = _runtime(n)
+    link = str(link).strip()
+    if not link:
+        return f"hopper{n} pin link is empty"
+    with _RUNTIME_LOCK:
+        previous_desired = state["desired"]
+        previous_held = state["held"]
+        state["desired"] = True
+        state["held"] = True
+        try:
+            _launch_locked(state, link, index=state.get("index"), label="PIN")
+        except Exception as exc:
+            state["desired"] = previous_desired
+            state["held"] = previous_held
+            return f"hopper{n} launch failed: {exc}"
+    return f"hopper{n} pinned to that link, holding (/unpin {n} or /continue; link not saved)"
+
+
+def release_hopper(n: int) -> str:
+    state = _runtime(n)
+    with _RUNTIME_LOCK:
+        state["held"] = False
+        links = hopper_links(n)
+        if state["desired"] and links:
+            index = state["index"] if state["index"] is not None and state["index"] < len(links) else 0
+            try:
+                _launch_index_locked(state, index)
+            except Exception as exc:
+                state["actual"] = False
+                return f"hopper{n} resume failed: {exc}"
+    return f"hopper{n} released, resuming rotation"
 
 
 # ─────────────────────────── autoexec scripts ───────────────────────────
@@ -207,18 +903,6 @@ def do_autotrade(o: dict) -> str:
 
 
 # ─────────────────────────── status board ───────────────────────────
-SRV_RE  = re.compile(r"RF\d+")
-PROG_RE = re.compile(r"(\d+)s\s*/\s*(\d+)s")
-
-
-def _parse(n: int):
-    line = pane_tail(n)
-    s, p = SRV_RE.search(line), PROG_RE.search(line)
-    return (s.group() if s else None,
-            int(p.group(1)) if p else 0,
-            int(p.group(2)) if p else 0)
-
-
 def _bar(el: int, tot: int, w: int = 10) -> str:
     f = min(w, int(w * el / tot)) if tot else 0
     return "█" * f + "░" * (w - f)
@@ -239,22 +923,52 @@ def device_health() -> str:
 def build_board():
     rows, up, now = [], 0, []
     for n in HOPPERS:
-        if not is_running(n):
+        state = _runtime(n)
+        if not state["desired"]:
             rows.append(f"{n:>2}  {'—':<5} stopped")
             continue
-        if "PINNED" in pane_tail(n):
+        if state["actual"]:
             up += 1
+        if state["held"]:
             now.append(f"{n}:PIN")
             rows.append(f"{n:>2}  📌    held")
             continue
-        srv, el, tot = _parse(n)
-        up += 1
-        now.append(f"{n}:{srv or '?'}")               # this hopper's current server
-        prog = f"{_bar(el, tot)} {el:>3}/{tot}s" if tot else "starting…"
+        index = state.get("index")
+        links = hopper_links(n)
+        srv = f"RF{index + 1}" if index is not None and index < len(links) else None
+        now.append(f"{n}:{srv or '?'}")
+        rotation = _normalise_rotation(ensure_rotations().get(str(n), {}))
+        total = rotation["cooldown"] if srv else 0
+        elapsed = max(0, min(total, int(time.time() - state.get("last_launch", time.time())))) if total else 0
+        prog = f"{_bar(elapsed, total)} {elapsed:>3}/{total}s" if total else "starting…"
         rows.append(f"{n:>2}  {srv or '??':<5} {prog}")
     board  = "```\n #  srv   progress\n" + "\n".join(rows) + "\n```"
     footer = f"{device_health()} · {up}/{len(HOPPERS)} running"
     return board, footer, now
+
+
+def trade_snapshot() -> dict:
+    """Return current validated trade data for the live poll only."""
+    now = time.time()
+    snapshot = {}
+    with _RUNTIME_LOCK:
+        for n in HOPPERS:
+            state = _runtime(n)
+            if not state.get("desired"):
+                snapshot[str(n)] = {"status": "stopped", "fresh": False}
+                continue
+            trade = _refresh_trade_locked(state, now)
+            if trade is None:
+                launched = state.get("trade_launch_at") or state.get("last_launch") or now
+                grace_left = max(0, math.ceil(TRADE_LAUNCH_GRACE - (now - launched)))
+                snapshot[str(n)] = {
+                    "status": "no script",
+                    "fresh": False,
+                    "grace": grace_left,
+                }
+            else:
+                snapshot[str(n)] = dict(trade)
+    return snapshot
 
 
 def read_inv() -> dict:
@@ -395,6 +1109,10 @@ def dispatch(cmd: str) -> str:
         return do_autotrade(json.loads(cmd[len("autotrade "):]))
     p = shlex.split(cmd)
     v, a = p[0], p[1:]
+    if v == "rotation_set":
+        if len(a) != 2:
+            raise ValueError("rotation_set requires hopper and config")
+        return set_rotation(int(a[0]), json.loads(a[1]))
     if v == "pricelog":
         return (f"prices cached: {len(PRICES)} · rarities: {len(RARITIES)}\n"
                 + ("\n".join(PRICE_LOG[-24:]) or "(no price activity yet)"))
@@ -405,27 +1123,18 @@ def dispatch(cmd: str) -> str:
     if v == "stop":      return stop_hopper(int(a[0]))
     if v == "restart":   stop_hopper(int(a[0])); return start_hopper(int(a[0]))
     if v == "startall":  return "\n".join(start_hopper(n) for n in HOPPERS)
-    if v == "stopall":   tmux("kill-session", "-t", SESSION); return f"killed session '{SESSION}'"
-    if v == "goto":      write_cmd(int(a[0]), f"goto{a[1]}"); return f"hopper{a[0]} → RF{a[1]}"
+    if v == "stopall":   return "\n".join(stop_hopper(n) for n in HOPPERS)
+    if v == "goto":      return goto_hopper(int(a[0]), int(a[1]))
     if v == "goto_pin":
-        n, srv = int(a[0]), int(a[1])
-        lst = hopper_links(n)
-        if not (1 <= srv <= len(lst)):
-            return f"hopper{n} has no RF{srv} (has RF1..RF{len(lst)})"
-        write_cmd(n, f"pin {lst[srv - 1]}")             # jump there AND hold (like a targeted all_goto)
-        return f"hopper{n} pinned to RF{srv}, holding (/continue to release)"
+        return goto_hopper(int(a[0]), int(a[1]), hold=True)
     if v == "pin":                                       # paste a link -> pin ONE hopper (link not saved)
-        write_cmd(int(a[0]), f"pin {a[1].strip()}")
-        return f"hopper{a[0]} pinned to that link, holding (/unpin {a[0]} or /continue; link not saved)"
+        return pin_hopper(int(a[0]), a[1])
     if v == "unpin":
-        clear_cmd(int(a[0]))
-        return f"hopper{a[0]} released, resuming rotation"
+        return release_hopper(int(a[0]))
     if v == "all_goto":
-        for n in HOPPERS: write_cmd(n, f"pin {a[0].strip()}")
-        return "all hoppers pinned, holding (/continue to resume)"
+        return "\n".join(pin_hopper(n, a[0]) for n in HOPPERS)
     if v == "continue":
-        for n in HOPPERS: clear_cmd(n)
-        return "resuming rotation"
+        return "\n".join(release_hopper(n) for n in HOPPERS)
     if v == "assign":    set_range(int(a[0]), int(a[1]), int(a[2])); return f"hopper{a[0]} = links {a[1]}-{a[2]} ({len(hopper_links(int(a[0])))} servers)"
     if v == "assigns":
         d = ranges()
@@ -468,9 +1177,15 @@ def safe(cmd: str) -> str:
 def poll(results: list) -> list:
     board, footer, now = build_board()
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
+    packages = {
+        str(n): _runtime(n)["package"] for n in HOPPERS
+        if _runtime(n)["package"]
+    }
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
-                       "servers": servers, "srv_now": now, "prices": PRICES,
-                       "rarities": RARITIES, "results": results}).encode()
+                       "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
+                       "rarities": RARITIES, "rotations": rotation_snapshot(),
+                       "trades": trade_snapshot(),
+                       "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
                                           "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)
@@ -480,6 +1195,19 @@ def poll(results: list) -> list:
 
 def main():
     print(f"[agent {PHONE}] polling {VPS_URL} every {INTERVAL}s")
+    detected = detect_packages() if AUTO_DETECT_PACKAGES else []
+    if AUTO_DETECT_PACKAGES:
+        print(f"[agent {PHONE}] detected {len(detected)} Roblox package(s): {', '.join(detected) or 'none'}", flush=True)
+    mode = resolved_window_mode()
+    mode_label = f"windowingMode {mode}" if mode is not None else "Android default"
+    print(f"[agent {PHONE}] window mode: {mode_label}", flush=True)
+    for n in HOPPERS:
+        state = _runtime(n)
+        print(f"[agent {PHONE}] hopper{n} -> {state['package'] or 'NOT DETECTED'}", flush=True)
+    threading.Thread(target=runtime_worker, daemon=True).start()
+    if START_ON_BOOT:
+        for n in HOPPERS:
+            print(f"[agent {PHONE}] {start_hopper(n)}", flush=True)
     threading.Thread(target=price_worker, daemon=True).start()   # fetch StarPets prices in the background
     results = []
     while True:

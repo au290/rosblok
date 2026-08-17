@@ -49,10 +49,67 @@ termux-setup-storage 2>/dev/null || true
 mkdir -p "$DIR/cmd"
 cd "$DIR"
 
-if [ -f config.txt ]; then                        # re-run (e.g. after reboot): infer mode, no prompts
-    grep -q '^VPS_URL=' config.txt && MODE=agent || MODE=master
-    echo "[setup] existing config.txt found -> $MODE mode (no prompts)"
+# Read and update individual config values without replacing the rest of the file.
+config_get() {
+    [ -f config.txt ] || return 0
+    sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" config.txt | head -n 1
+}
+
+config_set() {
+    local key="$1" value="$2" tmp=".config.txt.tmp"
+    awk -v key="$key" -v value="$value" '
+        BEGIN { found = 0 }
+        $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            if (!found) print key "=" value
+            found = 1
+            next
+        }
+        { print }
+        END { if (!found) print key "=" value }
+    ' config.txt > "$tmp"
+    mv "$tmp" config.txt
+}
+
+ensure_config() {
+    local key="$1" label="$2" default="$3" required="$4" value
+    value="$(config_get "$key")"
+    [ -n "$(printf '%s' "$value" | tr -d '[:space:]')" ] && return 0
+    while true; do
+        if [ -n "$default" ]; then
+            printf "[setup] %s [%s]: " "$label" "$default"
+        else
+            printf "[setup] %s: " "$label"
+        fi
+        read -r value </dev/tty
+        [ -z "$value" ] && value="$default"
+        if [ -n "$value" ] || [ "$required" != "required" ]; then
+            config_set "$key" "$value"
+            return 0
+        fi
+        echo "[setup] $label cannot be empty."
+    done
+}
+
+default_config() {
+    local key="$1" value="$2"
+    [ -n "$(config_get "$key" | tr -d '[:space:]')" ] || config_set "$key" "$value"
+}
+
+if [ -f config.txt ]; then                        # re-run: infer mode and repair only missing values
+    if grep -q '^[[:space:]]*VPS_URL[[:space:]]*=' config.txt; then
+        MODE=agent
+    elif grep -q '^[[:space:]]*GUILD_ID[[:space:]]*=' config.txt; then
+        MODE=master
+    elif [ -f agent.py ]; then
+        MODE=agent
+    elif [ -f master_bot.py ]; then
+        MODE=master
+    else
+        MODE=agent
+    fi
+    echo "[setup] existing config.txt found -> $MODE mode; keeping existing values"
 else
+    : > config.txt
     printf "[setup] mode - 'agent' (VPS) or 'master' (standalone) [agent]: "
     read -r MODE </dev/tty; [ -z "$MODE" ] && MODE=agent
 fi
@@ -61,26 +118,30 @@ if [ "$MODE" = "master" ]; then
     ENTRY=master_bot.py
     dl "$RAW/$ENTRY" "$ENTRY"
     echo "[setup] python deps..."; pip install -q -U discord.py
-    if [ ! -f token.txt ]; then
-        printf "[setup] Discord bot token: "; read -r T </dev/tty
+    if [ ! -s token.txt ]; then
+        while true; do
+            printf "[setup] Discord bot token: "; read -r T </dev/tty
+            [ -n "$T" ] && break
+            echo "[setup] Discord bot token cannot be empty."
+        done
         printf '%s\n' "$T" > token.txt
     fi
-    if [ ! -f config.txt ]; then                  # keep existing config on re-run (e.g. after reboot)
-        printf "[setup] server (guild) ID: ";     read -r GID </dev/tty
-        printf "[setup] phone label [A]: ";       read -r PH  </dev/tty; [ -z "$PH" ] && PH=A
-        printf "[setup] hoppers [1,2,3,4,5]: ";    read -r HP  </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
-        { echo "GUILD_ID=$GID"; echo "PHONE=$PH"; echo "HOPPERS=$HP"; } > config.txt
-    fi
+    ensure_config GUILD_ID "server (guild) ID" "" required
+    ensure_config PHONE "phone label" "A" required
+    ensure_config HOPPERS "hoppers" "1,2,3,4,5" required
 else
     ENTRY=agent.py
     dl "$RAW/$ENTRY" "$ENTRY"                     # agent needs no pip deps (stdlib only)
-    if [ ! -f config.txt ]; then                  # keep existing config on re-run (e.g. after reboot)
-        printf "[setup] VPS URL [https://api.kqing.web.id]: "; read -r VU </dev/tty; [ -z "$VU" ] && VU=https://api.kqing.web.id
-        printf "[setup] shared KEY: ";                read -r KY </dev/tty
-        printf "[setup] phone label [A]: ";           read -r PH </dev/tty; [ -z "$PH" ] && PH=A
-        printf "[setup] hoppers [1,2,3,4,5]: ";        read -r HP </dev/tty; [ -z "$HP" ] && HP=1,2,3,4,5
-        { echo "PHONE=$PH"; echo "VPS_URL=$VU"; echo "KEY=$KY"; echo "HOPPERS=$HP"; } > config.txt
-    fi
+    ensure_config VPS_URL "VPS URL" "https://api.kqing.web.id" required
+    ensure_config KEY "shared KEY" "" required
+    ensure_config PHONE "phone label" "A" required
+    ensure_config HOPPERS "hoppers" "1,2,3,4,5" required
+    default_config PLACE_ID "920587237"
+    default_config WINDOW_MODE "auto"
+    default_config START_ON_BOOT "false"
+    default_config AUTO_DETECT_PACKAGES "true"
+    default_config TRADE_STALE_SECONDS "40"
+    default_config TRADE_LAUNCH_GRACE "45"
 fi
 
 dl "$RAW/autoupdate.sh" autoupdate.sh              # keeps $ENTRY current + restarts it
@@ -94,5 +155,10 @@ echo "[setup] $ENTRY running (auto-updating) in tmux session 'farmctl'."
 echo "        watch:   tmux attach -t farmctl      (detach: Ctrl-b then d)"
 echo "        config:  edit $DIR/config.txt by hand to tweak later"
 echo
-echo "[setup] STILL MANUAL: drop hopper*.lua + link.txt + servers.txt into $DIR"
-echo "        (they're generated on a PC, not in the repo)."
+if [ "$MODE" = "master" ]; then
+    echo "[setup] STILL MANUAL: drop hopper*.lua + link.txt + servers.txt into $DIR"
+    echo "        (they're generated on a PC, not in the repo)."
+else
+    echo "[setup] agent.py controls Roblox packages directly; hopper*.lua is not required."
+    echo "        Configure rotations in the web dashboard or provide link.txt + servers.txt."
+fi

@@ -1,10 +1,9 @@
--- monitor_adoptme.lua — Adopt Me inventory dump (file-only, no server)
--- Place in your executor autoexec. Every INTERVAL seconds it writes
--- inv/<player>.json into the executor workspace; the Discord bot's /inv reads it.
+-- monitor_adoptme.lua - Adopt Me inventory reporter (direct web POST)
+-- Place in your executor autoexec. Every INTERVAL seconds it sends this
+-- account's inventory directly to the Hopper Fleet web server.
 --
--- Pets are grouped by kind (+neon/mega) with a full-grown count. Display name and
--- rarity are resolved OFF-GAME (kind -> clean name on the bot; rarity from StarPets),
--- so this script stays tiny and never touches the game's pet databases.
+-- Set VPS_URL, KEY, and PHONE before installing. The shared key is visible in
+-- this client script by design; use HTTPS when the server is not local.
 
 local RS          = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -13,11 +12,52 @@ local Players     = game:GetService("Players")
 repeat task.wait() until game:IsLoaded()
 task.wait(3)
 
+local VPS_URL  = "http://YOUR_VPS_IP:8090" -- no trailing slash
+local KEY      = "CHANGE_ME_SHARED_SECRET" -- must match web/config.txt
+local PHONE    = "A"                       -- phone id configured in web/config.txt
 local INTERVAL = 30
-local FG_AGE   = 5                       -- ages 0..5 (Newborn..Full Grown)
+local FG_AGE   = 5                         -- ages 0..5 (Newborn..Full Grown)
 local LP       = Players.LocalPlayer
 
--- ── ClientData (bucks + inventory) ──
+VPS_URL = VPS_URL:gsub("/+$", "")
+
+local function request_function()
+    return (syn and syn.request) or (http and http.request) or http_request or request
+end
+
+local function post_report(body)
+    local url = VPS_URL .. "/api/" .. PHONE .. "/poll"
+    local headers = {
+        ["Content-Type"] = "application/json",
+        ["X-Key"] = KEY,
+        ["User-Agent"] = "adoptme-monitor",
+    }
+    local request_fn = request_function()
+
+    if request_fn then
+        local ok, response = pcall(function()
+            return request_fn({ Url = url, Method = "POST", Headers = headers, Body = body })
+        end)
+        if not ok then return false, tostring(response) end
+        local status = response and tonumber(response.StatusCode or response.Status)
+        if status and (status < 200 or status >= 300) then
+            return false, "HTTP " .. tostring(status)
+        end
+        return true
+    end
+
+    -- Fallback for executors that expose HttpService but no request helper.
+    local ok, response = pcall(function()
+        return HttpService:RequestAsync({ Url = url, Method = "POST", Headers = headers, Body = body })
+    end)
+    if not ok then return false, tostring(response) end
+    if response and response.Success == false then
+        return false, "HTTP " .. tostring(response.StatusCode or "request failed")
+    end
+    return true
+end
+
+-- ClientData (bucks + inventory)
 local ClientData
 do
     local okF, Fsys = pcall(function() return require(RS.Fsys) end)
@@ -31,7 +71,7 @@ do
     end
 end
 if not ClientData or type(ClientData.get_data) ~= "function" then
-    warn("[monitor] could not load Adopt Me ClientData — aborting")
+    warn("[monitor] could not load Adopt Me ClientData - aborting")
     return
 end
 
@@ -55,7 +95,7 @@ local function getStats()
                 local props = item.properties or {}
                 local kind  = tostring(item.kind or item.id or "?")
                 local cat   = tostring(item.category or ""):lower()
-                -- unhatched egg: kind ends in "egg" (cracked_egg…); hatched pets end in the pet name
+                -- Unhatched eggs are tracked separately from hatched pets.
                 if kind:match("egg$") or cat == "egg" or cat == "eggs" then
                     eggCount = eggCount + 1
                     eggsByType[kind] = (eggsByType[kind] or 0) + 1
@@ -72,7 +112,7 @@ local function getStats()
                         byType[key] = t
                     end
                     t.count = t.count + 1
-                    if age >= FG_AGE then t.fg = t.fg + 1 end   -- full grown
+                    if age >= FG_AGE then t.fg = t.fg + 1 end
                 end
             end
         end
@@ -80,24 +120,33 @@ local function getStats()
     return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType }
 end
 
--- ── Dump to file ──
-local function dump()
+local function report()
     local money, pets = getStats()
-    if not money or not writefile then return end
-    pcall(function()
-        if makefolder then makefolder("inv") end
-        writefile("inv/" .. LP.Name .. ".json", HttpService:JSONEncode({
-            player = LP.Name,
-            money  = money,
-            stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs },
-            pets   = pets,
-        }))
-    end)
-    print(string.format("[monitor] %s | bucks:%d pets:%d eggs:%d", LP.Name, money, pets.count, pets.eggs))
+    if not money then
+        warn("[monitor] Adopt Me data is not ready")
+        return
+    end
+
+    local account = {
+        player = LP.Name,
+        money  = money,
+        stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs },
+        pets   = pets,
+    }
+    local payload = HttpService:JSONEncode({
+        source = "monitor_adoptme",
+        inv = { [LP.Name] = account },
+    })
+    local ok, err = post_report(payload)
+    if ok then
+        print(string.format("[monitor] %s | bucks:%d pets:%d eggs:%d | sent", LP.Name, money, pets.count, pets.eggs))
+    else
+        warn("[monitor] report failed: " .. tostring(err))
+    end
 end
 
-dump()
+report()
 while true do
     task.wait(INTERVAL)
-    dump()
+    report()
 end

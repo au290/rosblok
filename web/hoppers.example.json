@@ -1,0 +1,15 @@
+{
+  "A:1": {
+    "device": "google Pixel 9 Pro XL",
+    "account": "@example_account",
+    "package": "com.roblox.clienv"
+  },
+  "A:2": {
+    "device": "google Pixel 9 Pro XL",
+    "account": "@another_account"
+  },
+  "B:1": {
+    "device": "samsung SM-S9310",
+    "account": "@phone_b_account"
+  }
+}

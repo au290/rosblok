@@ -1,0 +1,12 @@
+# Copy this file to config.txt and replace the placeholders.
+HOST=0.0.0.0
+PORT=8090
+
+# Must match KEY in each phone's agent config.txt.
+KEY=CHANGE_ME_SHARED_SECRET
+
+# Used only by the browser login. Do not reuse the phone KEY.
+WEB_TOKEN=CHANGE_ME_WEB_TOKEN
+
+PHONES=A,B
+GRACE=20
