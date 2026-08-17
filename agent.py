@@ -19,6 +19,7 @@ import os
 import threading
 import subprocess
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from collections import deque
@@ -115,6 +116,10 @@ _WINDOW_MODE_READY = False
 _DETECTED_WINDOW_MODE = None
 _TRADE_FILE_CACHE: dict[str, tuple[float, list[Path]]] = {}
 _PACKAGE_RE = re.compile(r"^[A-Za-z0-9_.]+$")
+_ACCOUNT_LOCK = threading.Lock()
+_ACCOUNT_CACHE: dict[str, tuple[float, str]] = {}
+_USER_ID_CACHE: dict[str, str] = {}
+ACCOUNT_CACHE_TTL = 60
 
 
 def detect_packages(refresh: bool = False) -> list[str]:
@@ -980,6 +985,109 @@ def trade_account_name(trade: dict | None) -> str:
     return match.group(1) if match else ""
 
 
+def parse_package_identity(xml_text: str) -> tuple[str, str]:
+    """Return ``(username, user_id)`` from Roblox's package preferences."""
+    try:
+        root = ET.fromstring(xml_text)
+    except (ET.ParseError, TypeError, ValueError):
+        return "", ""
+    username = ""
+    user_id = ""
+    for item in root:
+        key = str(item.attrib.get("name", "")).strip().lower()
+        if key == "username":
+            value = str(item.text or item.attrib.get("value", "")).strip()
+            if re.fullmatch(r"[A-Za-z0-9_]{3,20}", value):
+                username = value
+        elif key in {"userid_long", "userid", "user_id"}:
+            value = str(item.attrib.get("value", item.text or "")).strip()
+            if re.fullmatch(r"[1-9]\d{0,19}", value):
+                user_id = value
+    return username, user_id
+
+
+def _package_preferences(package: str) -> str | None:
+    """Read prefs.xml through root without touching the WebView cookie DB."""
+    if not _PACKAGE_RE.fullmatch(package or ""):
+        return None
+    for root in ("/data/data", "/data/user/0"):
+        path = f"{root}/{package}/shared_prefs/prefs.xml"
+        result = _su(f"cat {shlex.quote(path)}", timeout=8)
+        if result and result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    return None
+
+
+def _username_for_user_id(user_id: str) -> str:
+    with _ACCOUNT_LOCK:
+        cached = _USER_ID_CACHE.get(user_id, "")
+    if cached:
+        return cached
+    username = ""
+    try:
+        request = urllib.request.Request(
+            f"https://users.roblox.com/v1/users/{quote(user_id, safe='')}",
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 (hopperbot)"},
+        )
+        with urllib.request.urlopen(request, timeout=12) as response:
+            payload = json.load(response)
+        value = payload.get("name") if isinstance(payload, dict) else None
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_]{3,20}", value.strip()):
+            username = value.strip()
+    except Exception:
+        pass
+    if username:
+        with _ACCOUNT_LOCK:
+            _USER_ID_CACHE[user_id] = username
+    return username
+
+
+def package_account_name(package: str, refresh: bool = False) -> str:
+    """Return the account currently stored by one installed Roblox package."""
+    if not _PACKAGE_RE.fullmatch(package or ""):
+        return ""
+    now = time.monotonic()
+    with _ACCOUNT_LOCK:
+        cached = _ACCOUNT_CACHE.get(package)
+        if cached and not refresh and now - cached[0] < ACCOUNT_CACHE_TTL:
+            return cached[1]
+    xml_text = _package_preferences(package)
+    if xml_text is None:
+        # Keep a previously detected name through a temporary root/read error.
+        username = cached[1] if cached else ""
+    else:
+        username, user_id = parse_package_identity(xml_text)
+        if not username and user_id:
+            username = _username_for_user_id(user_id)
+    with _ACCOUNT_LOCK:
+        _ACCOUNT_CACHE[package] = (time.monotonic(), username)
+    return username
+
+
+def package_account_snapshot() -> dict[str, str]:
+    accounts = {}
+    for n in HOPPERS:
+        package = _runtime(n).get("package", "")
+        with _ACCOUNT_LOCK:
+            cached = _ACCOUNT_CACHE.get(package)
+        username = cached[1] if cached else ""
+        if username:
+            accounts[str(n)] = username
+    return accounts
+
+
+def account_worker() -> None:
+    """Refresh package identities without delaying the VPS poll heartbeat."""
+    while True:
+        for n in HOPPERS:
+            try:
+                package = _runtime(n).get("package", "")
+                package_account_name(package, refresh=True)
+            except Exception:
+                pass
+        time.sleep(ACCOUNT_CACHE_TTL)
+
+
 def read_inv() -> dict:
     out = {}
     if INV_DIR.exists():
@@ -1196,6 +1304,9 @@ def poll(results: list) -> list:
         for number, trade in trades.items()
         if (account := trade_account_name(trade))
     }
+    # prefs.xml is tied directly to the package assigned to this hopper, so it
+    # is more reliable than a shared-workspace heartbeat filename.
+    accounts.update(package_account_snapshot())
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
@@ -1220,6 +1331,7 @@ def main():
         state = _runtime(n)
         print(f"[agent {PHONE}] hopper{n} -> {state['package'] or 'NOT DETECTED'}", flush=True)
     threading.Thread(target=runtime_worker, daemon=True).start()
+    threading.Thread(target=account_worker, daemon=True).start()
     if START_ON_BOOT:
         for n in HOPPERS:
             print(f"[agent {PHONE}] {start_hopper(n)}", flush=True)

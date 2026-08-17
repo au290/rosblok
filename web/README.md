@@ -111,10 +111,14 @@ Restart `agent.py`. The phone should appear online in the dashboard. Existing
 phone. `agent.py` now launches and monitors each Roblox clone directly, so it
 does not run `hopper*.lua` or create one tmux window per hopper.
 
-The account column is filled automatically from the heartbeat filename
-`<username>_winteraddons.json`. It remains `-` until that hopper's addon has
-written a detectable heartbeat. Short network stalls do not mark a phone
-offline; the dashboard uses a minimum 60-second heartbeat grace period.
+The account column is filled automatically from the `username` stored in each
+Roblox package's `/data/data/<package>/shared_prefs/prefs.xml`. If only
+`userid_long` is available, the phone resolves it through Roblox's public user
+endpoint. The agent reads this package-local file through root, never opens the
+WebView Cookies database, and sends only the resulting username. The heartbeat
+filename `<username>_winteraddons.json` remains a fallback. Short network
+stalls do not mark a phone offline; the dashboard uses a minimum 60-second
+heartbeat grace period.
 
 For a complete Termux install, run the repository's `setup.sh` one-liner rather
 than curling `agent.py` by itself. Re-running `setup.sh` preserves non-empty
@@ -154,8 +158,8 @@ hoppers always remain on their pinned server.
 
 `count`, `items`, and `meta` are validated and shown in the Trade column. This
 live trade report is kept only in agent/server memory and is not saved on the
-VPS. The filename also supplies the account label when no optional
-`hoppers.json` label exists.
+VPS. The filename also supplies a fallback account label when package-local
+preferences and optional `hoppers.json` metadata do not provide one.
 
 Defaults can be overridden in the phone's `config.txt` when an executor uses a
 different workspace or heartbeat timing:
