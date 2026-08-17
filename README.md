@@ -60,8 +60,9 @@ The phone config is stored at `/storage/emulated/0/Download/config.txt`.
 The installer preserves existing values and asks only for missing required
 values. The agent discovers installed Roblox packages automatically and keeps
 hopper rotations on the device. Swap/Trade addon heartbeat files named
-`<username>_winteraddons.json` drive server advancement and same-server
-recovery without requiring changes to the addon.
+`<username>_winteraddons.json` provide each hopper's account name, drive server
+advancement, and trigger same-server recovery without requiring changes to the
+addon.
 
 The default web endpoint is `http://agent.kqing.web.id`. Existing installs that
 still contain the retired `https://api.kqing.web.id` default are migrated by

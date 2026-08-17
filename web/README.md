@@ -87,7 +87,9 @@ from the phone agent.
 
 The `KEY` must be identical to the phone `KEY`. `WEB_TOKEN` is only for the
 browser and should be different. Use HTTPS or put the server behind a reverse
-proxy before exposing it to the internet.
+proxy before exposing it to the internet. Browser login is kept for 24 hours in
+a signed HttpOnly cookie and survives normal page refreshes and web-server
+restarts.
 
 ## Move a phone to the web control plane
 
@@ -108,6 +110,11 @@ Restart `agent.py`. The phone should appear online in the dashboard. Existing
 `link.txt`, `servers.txt`, Delta scripts, and inventory files remain on the
 phone. `agent.py` now launches and monitors each Roblox clone directly, so it
 does not run `hopper*.lua` or create one tmux window per hopper.
+
+The account column is filled automatically from the heartbeat filename
+`<username>_winteraddons.json`. It remains `-` until that hopper's addon has
+written a detectable heartbeat. Short network stalls do not mark a phone
+offline; the dashboard uses a minimum 60-second heartbeat grace period.
 
 For a complete Termux install, run the repository's `setup.sh` one-liner rather
 than curling `agent.py` by itself. Re-running `setup.sh` preserves non-empty

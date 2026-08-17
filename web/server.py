@@ -16,6 +16,8 @@ send inventory independently.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import json
 import math
 import re
@@ -39,7 +41,7 @@ PORT = 8090
 KEY = "CHANGE_ME_SHARED_SECRET"
 WEB_TOKEN = "CHANGE_ME_WEB_TOKEN"
 PHONES = ["A", "B"]
-GRACE = 20
+GRACE = 60
 
 
 def load_config() -> None:
@@ -63,7 +65,9 @@ def load_config() -> None:
             elif name == "PHONES" and value:
                 PHONES = [item.strip() for item in value.split(",") if item.strip()]
             elif name == "GRACE" and value:
-                GRACE = int(value)
+                # Keep the dashboard from flickering offline during a short
+                # mobile/VPS network stall.
+                GRACE = max(60, int(value))
 
     # config.txt is the installer's source of truth. Keep the legacy token file
     # as a fallback for older installs that still use it with a placeholder config.
@@ -93,6 +97,7 @@ reports: dict[str, dict] = {
         "servers": 0,
         "srv_now": [],
         "packages": {},
+        "accounts": {},
         "prices": {},
         "rarities": {},
         "rotations": {},
@@ -102,10 +107,18 @@ reports: dict[str, dict] = {
     for phone in PHONES
 }
 
-# Short-lived browser sessions. The long-lived WEB_TOKEN never goes into the
-# page or URL; the browser receives only this HttpOnly cookie.
-sessions: dict[str, float] = {}
+# The long-lived WEB_TOKEN never goes into the page or URL; the browser receives
+# only this signed HttpOnly cookie. Signing makes it survive a server restart.
 SESSION_TTL = 24 * 60 * 60
+
+
+def _session_cookie(expires: int | None = None) -> str:
+    expiry = int(expires or (time.time() + SESSION_TTL))
+    payload = f"{expiry}.{uuid.uuid4().hex}"
+    signature = hmac.new(
+        WEB_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}.{signature}"
 
 
 def targets(phone: str) -> list[str]:
@@ -235,6 +248,12 @@ def _merge_report(phone: str, body: dict) -> None:
             for number, package in body["packages"].items()
             if re.fullmatch(r"\d+", str(number)) and re.fullmatch(r"[A-Za-z0-9_.]+", str(package))
         }
+    if isinstance(body.get("accounts"), dict):
+        report["accounts"] = {
+            str(number): str(account).strip()[:80]
+            for number, account in body["accounts"].items()
+            if re.fullmatch(r"\d+", str(number)) and str(account).strip()
+        }
     if isinstance(body.get("rotations"), dict):
         report["rotations"] = body["rotations"]
     if isinstance(body.get("trades"), dict):
@@ -291,12 +310,20 @@ async def handle_poll(request: web.Request) -> web.Response:
 
 def _session_valid(request: web.Request) -> bool:
     now = time.time()
-    session_id = request.cookies.get("web_session", "")
-    expires = sessions.get(session_id, 0)
-    if expires > now:
-        return True
-    if session_id:
-        sessions.pop(session_id, None)
+    cookie = request.cookies.get("web_session", "")
+    parts = cookie.split(".")
+    if len(parts) == 3:
+        expiry, nonce, signature = parts
+        try:
+            expires = int(expiry)
+        except ValueError:
+            expires = 0
+        payload = f"{expiry}.{nonce}"
+        expected = hmac.new(
+            WEB_TOKEN.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        if expires > now and hmac.compare_digest(signature, expected):
+            return True
 
     # Bearer auth is useful for scripts and local API clients. It is not put in
     # the dashboard page, which uses the HttpOnly session cookie instead.
@@ -318,25 +345,22 @@ async def handle_login(request: web.Request) -> web.Response:
     if body.get("token") != WEB_TOKEN or WEB_TOKEN.startswith("CHANGE_ME"):
         return web.json_response({"error": "invalid token"}, status=401)
 
-    session_id = uuid.uuid4().hex
-    sessions[session_id] = time.time() + SESSION_TTL
     response = web.json_response({"ok": True})
     response.set_cookie(
         "web_session",
-        session_id,
+        _session_cookie(),
         max_age=SESSION_TTL,
         httponly=True,
         samesite="Lax",
         secure=False,
+        path="/",
     )
     return response
 
 
 async def handle_logout(request: web.Request) -> web.Response:
-    session_id = request.cookies.get("web_session", "")
-    sessions.pop(session_id, None)
     response = web.json_response({"ok": True})
-    response.del_cookie("web_session")
+    response.del_cookie("web_session", path="/")
     return response
 
 
@@ -508,6 +532,7 @@ def _hopper_rows(phone: str) -> list[dict]:
                 item = {}
             packages = report.get("packages") or {}
             package = packages.get(str(number)) or item.get("package") or "Not detected"
+            accounts = report.get("accounts") or {}
             rotation = (report.get("rotations") or {}).get(str(number), {})
             if not isinstance(rotation, dict):
                 rotation = {}
@@ -528,6 +553,8 @@ def _hopper_rows(phone: str) -> list[dict]:
             if not isinstance(trade, dict):
                 trade = {}
             account = item.get("account") or "-"
+            if account == "-":
+                account = accounts.get(str(number)) or "-"
             if account == "-" and trade.get("file"):
                 account = re.sub(r"_winteraddons\.json$", "", trade["file"], flags=re.I)
             rows.append({

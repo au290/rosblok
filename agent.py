@@ -973,6 +973,13 @@ def trade_snapshot() -> dict:
     return snapshot
 
 
+def trade_account_name(trade: dict | None) -> str:
+    """Extract the Roblox account name from its heartbeat filename."""
+    filename = str((trade or {}).get("file", ""))
+    match = re.fullmatch(r"([^/\\]+)_winteraddons\.json", filename, re.I)
+    return match.group(1) if match else ""
+
+
 def read_inv() -> dict:
     out = {}
     if INV_DIR.exists():
@@ -1183,10 +1190,16 @@ def poll(results: list) -> list:
         str(n): _runtime(n)["package"] for n in HOPPERS
         if _runtime(n)["package"]
     }
+    trades = trade_snapshot()
+    accounts = {
+        number: account
+        for number, trade in trades.items()
+        if (account := trade_account_name(trade))
+    }
     body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
-                       "trades": trade_snapshot(),
+                       "trades": trades, "accounts": accounts,
                        "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
