@@ -8,6 +8,7 @@ This workspace contains the active web control plane and phone agent.
 - `agent.py` - phone-side Roblox package launcher and rotation worker
 - `monitor_adoptme.lua` - direct inventory reporter for the executor
 - `setup.sh` - Termux installer and config repair script
+- `setup-vps.sh` - VPS web control-plane installer and service bootstrap
 - `autoupdate.sh` - phone-side agent updater
 
 ## Web Dashboard
@@ -21,6 +22,27 @@ python server.py
 
 Open `http://127.0.0.1:8090/`. Use `web/README.md` for dashboard setup,
 phone-agent configuration, rotations, seeding, and deployment details.
+
+## One-line Setup
+
+On a Debian/Ubuntu VPS, run this safe bootstrap. It installs Python, creates the
+web virtualenv, generates missing `KEY` and `WEB_TOKEN` values, and starts the
+dashboard as `panen-web` when systemd is available:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.sh -o /tmp/panen-vps.sh && bash /tmp/panen-vps.sh
+```
+
+On an Android phone running Termux, run the phone installer. It preserves
+existing settings and asks only for missing required values:
+
+```bash
+pkg upgrade -y && curl -fsSL https://raw.githubusercontent.com/au290/rosblok/main/setup.sh -o setup.sh && head -n1 setup.sh | grep -q '^#!' && bash setup.sh
+```
+
+The VPS installer prints the generated phone `KEY` and browser `WEB_TOKEN` at
+the end. Put the phone key in the Termux prompts/config; use the browser token
+only for dashboard login.
 
 ## Phone Agent
 

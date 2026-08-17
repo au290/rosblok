@@ -16,6 +16,12 @@ be saved and reported to the dashboard.
 
 ## Run
 
+For a fresh VPS, run the repository bootstrap from the server shell:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.sh -o /tmp/panen-vps.sh && bash /tmp/panen-vps.sh
+```
+
 ```powershell
 cd web
 Copy-Item config.example.txt config.txt
