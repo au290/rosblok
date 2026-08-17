@@ -4,11 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hopper Fleet Web Control</title>
+  <link rel="icon" type="image/png" href="/assets/logo.png?v=2">
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <section id="login-view" class="login-view">
+  <section id="boot-view" class="boot-view" role="status" aria-label="Loading dashboard">
+    <div class="boot-skeleton" aria-hidden="true">
+      <div class="boot-skeleton-head"><img class="boot-logo" src="/assets/logo.png?v=2" alt=""><span class="boot-spinner"></span><span class="boot-skeleton-line boot-title-line"></span></div>
+      <div class="boot-skeleton-metrics"><span></span><span></span><span></span><span></span></div>
+      <div class="boot-skeleton-content"><span class="boot-skeleton-panel"></span><span class="boot-skeleton-panel short"></span></div>
+    </div>
+  </section>
+
+  <section id="login-view" class="login-view" hidden>
     <div class="login-panel">
+      <img class="login-logo" src="/assets/logo.png?v=2" alt="Hopper Fleet">
       <p class="eyebrow">HOPPER FLEET</p>
       <h1>Web control</h1>
       <p class="muted">Sign in to view the fleet and send hopper commands.</p>
@@ -25,18 +35,18 @@
     <div class="app-shell">
       <aside id="sidebar" class="sidebar">
         <div class="brand">
-          <span class="brand-mark">H</span>
-          <span><strong>Hopper Fleet</strong><small>OPERATIONS</small></span>
+          <span class="brand-identity"><img class="brand-logo" src="/assets/logo.png?v=2" alt=""><span class="brand-copy"><strong>Hopper Fleet</strong><small>OPERATIONS</small></span></span>
+          <button id="sidebar-collapse-toggle" class="icon-button sidebar-collapse-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true"><span class="sidebar-chevron" aria-hidden="true"></span></button>
         </div>
         <div class="sidebar-label">Workspace</div>
         <nav class="sidebar-nav" aria-label="Workspace sections">
-          <button class="nav-item active" type="button" data-page="summary"><span class="nav-icon" aria-hidden="true">&#9638;</span><span>Executive summary</span></button>
-          <button class="nav-item" type="button" data-page="hoppers"><span class="nav-icon" aria-hidden="true">&#9881;</span><span>Hopper control</span></button>
-          <button class="nav-item" type="button" data-page="pets"><span class="nav-icon" aria-hidden="true">&#9672;</span><span>Pet trackstat</span></button>
+          <button class="nav-item active" type="button" data-page="summary" title="Executive summary"><span class="nav-icon" aria-hidden="true">&#9638;</span><span>Executive summary</span></button>
+          <button class="nav-item" type="button" data-page="hoppers" title="Hopper control"><span class="nav-icon" aria-hidden="true">&#9881;</span><span>Hopper control</span></button>
+          <button class="nav-item" type="button" data-page="pets" title="Pet trackstat"><span class="nav-icon" aria-hidden="true">&#9672;</span><span>Pet trackstat</span></button>
         </nav>
         <div class="sidebar-spacer"></div>
-        <div class="sidebar-status"><span class="live-dot"></span><span><strong>Live sync</strong><small id="sidebar-updated">Waiting for report</small></span></div>
-        <button id="logout-button" class="sidebar-logout" type="button"><span aria-hidden="true">&#10132;</span> Sign out</button>
+        <div class="sidebar-status" title="Live synchronization status"><span class="live-dot"></span><span><strong>Live sync</strong><small id="sidebar-updated">Auto refresh while open</small></span></div>
+        <button id="logout-button" class="sidebar-logout" type="button" title="Sign out"><span aria-hidden="true">&#10132;</span><span class="sidebar-logout-label">Sign out</span></button>
       </aside>
 
       <div class="main-shell">
@@ -46,10 +56,6 @@
             <p id="page-kicker" class="eyebrow">EXECUTIVE SUMMARY</p>
             <h1 id="page-title">Fleet at a glance</h1>
             <p id="page-subtitle" class="topbar-subtitle">A live view of value, hopper capacity, and pet inventory.</p>
-          </div>
-          <div class="top-actions">
-            <button id="refresh-button" class="icon-button" type="button" title="Refresh now" aria-label="Refresh now">&#8635;</button>
-            <span id="last-updated" class="last-updated">Waiting for a report</span>
           </div>
         </header>
 
@@ -61,8 +67,6 @@
               <div class="metric"><span>Total hoppers</span><strong id="metric-hoppers">-</strong><small>across the fleet</small></div>
               <div class="metric"><span>Total pets</span><strong id="metric-pets">-</strong><small>reported in inventory</small></div>
               <div class="metric"><span>Online phones</span><strong id="metric-online">-</strong><small>active connections</small></div>
-              <div class="metric"><span>In-game bucks</span><strong id="metric-bucks">-</strong><small>combined balance</small></div>
-              <div class="metric"><span>Eggs tracked</span><strong id="metric-eggs">-</strong><small>inventory count</small></div>
             </section>
             <div class="summary-layout">
               <section class="visual-card income-card"><div class="section-heading compact-heading"><div><p class="eyebrow">VALUE GRAPH</p><h3>Inventory income mix</h3></div><span class="chart-note">Top priced pets</span></div><div id="income-bars" class="bar-chart"><p class="empty">Waiting for priced inventory</p></div></section>
@@ -76,8 +80,35 @@
 
           <section class="page-view" data-page-view="hoppers" hidden>
             <div class="page-head"><div><p class="eyebrow">OPERATE</p><h2>Hopper control</h2><p class="muted">Every hopper gets its own row. Commands route to the phone automatically.</p></div><div class="page-head-stat"><strong id="hopper-count">0 hoppers</strong><span id="hopper-selection-count">0 selected</span></div></div>
-            <section class="hopper-section"><div class="hopper-toolbar"><input id="hopper-search" type="search" placeholder="Search device, account, package..." aria-label="Search hoppers"><select id="hopper-phone-filter" aria-label="Filter hoppers by phone"><option value="all">All phones</option></select><select id="hopper-device-filter" aria-label="Filter devices"><option value="all">All devices</option></select><span class="toolbar-spacer"></span><button id="hopper-bulk-start" class="primary" type="button">&#9654; Start selected</button><button id="hopper-bulk-stop" class="danger" type="button">&#9632; Stop selected</button></div><div class="hopper-table-wrap"><table class="hopper-table"><thead><tr><th class="check-column"><input id="hopper-select-all" type="checkbox" aria-label="Select visible hoppers"></th><th>Device</th><th>Account</th><th>Target</th><th>Runtime</th><th>Trade</th><th>Status</th><th>Actions</th></tr></thead><tbody id="hopper-body"><tr><td colspan="8" class="empty">Waiting for phone reports</td></tr></tbody></table></div></section>
-            <div class="workspace-grid"><aside class="control-panel"><div class="section-heading compact-heading"><div><p class="eyebrow">DIRECT COMMAND</p><h3>Send command</h3></div></div><label for="command-phone">Target phone</label><select id="command-phone"></select><label for="hopper-number">Hopper</label><input id="hopper-number" type="number" min="1" value="1"><div class="button-row"><button data-action="start" class="primary" type="button">Start</button><button data-action="stop" class="danger" type="button">Stop</button><button data-action="restart" type="button">Restart</button></div><div class="button-row"><button data-action="startall" type="button">Start all</button><button data-action="stopall" class="danger" type="button">Stop all</button></div><div class="control-divider"></div><label for="server-number">Server number</label><input id="server-number" type="number" min="1" value="1"><div class="button-row"><button data-action="goto" type="button">Go to</button><button data-action="goto_pin" type="button">Go and hold</button></div><label for="pin-url">Private-server URL</label><input id="pin-url" type="url" placeholder="https://www.roblox.com/share?..."><div class="button-row"><button data-action="pin" type="button">Pin hopper</button><button data-action="all_goto" type="button">Pin all</button></div><button data-action="continue" class="wide-button" type="button">Release pins and continue</button><div class="control-divider"></div><label for="log-lines">Log lines</label><input id="log-lines" type="number" min="1" max="100" value="15"><button data-action="logs" class="wide-button" type="button">Fetch logs</button><p id="command-result" class="command-result" role="status"></p><details class="advanced-controls"><summary>More controls</summary><label for="assignment-first">Link range</label><div class="split-inputs"><input id="assignment-first" type="number" min="1" value="1" aria-label="First link"><input id="assignment-last" type="number" min="1" value="20" aria-label="Last link"></div><div class="button-row"><button data-action="assign" type="button">Assign range</button><button data-action="assigns" type="button">Show assignments</button></div><div class="button-row"><button data-action="servers" type="button">Show servers</button><button data-action="unpin" type="button">Unpin hopper</button></div><label for="link-url">Add private-server link</label><input id="link-url" type="url" placeholder="https://www.roblox.com/share?..."><button data-action="link_add" class="wide-button" type="button">Add link to pool</button><div class="control-divider"></div><p class="eyebrow">SCRIPTS</p><label for="script-name">Script name</label><input id="script-name" type="text" placeholder="monitor.lua"><label for="script-url">Script URL</label><input id="script-url" type="url" placeholder="https://raw.githubusercontent.com/..."><div class="button-row"><button data-action="scripts" type="button">List</button><button data-action="script_get" type="button">View</button><button data-action="script_add" type="button">Add</button><button data-action="script_del" class="danger" type="button">Delete</button></div><div class="control-divider"></div><p class="eyebrow">AUTO-TRADE</p><div class="check-grid"><label><input class="trade-category" type="checkbox" value="pets"> Pets</label><label><input class="trade-category" type="checkbox" value="toys"> Toys</label><label><input class="trade-category" type="checkbox" value="food"> Food</label><label><input class="trade-category" type="checkbox" value="transport"> Transport</label><label><input class="trade-category" type="checkbox" value="gifts"> Gifts</label><label><input class="trade-category" type="checkbox" value="stickers"> Stickers</label><label><input class="trade-category" type="checkbox" value="pet_accessories"> Pet accessories</label></div><label for="trade-items">Specific item IDs (comma-separated)</label><input id="trade-items" type="text" placeholder="optional"><label for="trade-usernames">Target usernames (comma-separated)</label><input id="trade-usernames" type="text" placeholder="optional"><button data-action="autotrade" class="wide-button" type="button">Enable auto-trade</button><div class="button-row"><button data-action="pricelog" type="button">Price log</button><button data-action="refetch" type="button">Refresh prices</button></div></details></aside><section class="detail-column"><section class="detail-section output-section"><div class="section-heading compact-heading"><div><p class="eyebrow">ACTIVITY</p><h3>Command output</h3></div></div><pre id="output" class="output">No command run yet.</pre></section><section class="detail-section"><div class="section-heading compact-heading"><div><p class="eyebrow">CONNECTED DEVICES</p><h3>Phone reports</h3></div></div><div id="hopper-phone-cards" class="phone-grid"></div></section></section></div>
+            <section class="hopper-section">
+              <div class="hopper-toolbar">
+                <input id="hopper-search" type="search" placeholder="Search hopper, account, package..." aria-label="Search hoppers">
+                <select id="hopper-phone-filter" aria-label="Filter hoppers by phone"><option value="all">All phones</option></select>
+                <select id="hopper-device-filter" aria-label="Filter devices"><option value="all">All devices</option></select>
+                <span class="toolbar-spacer"></span>
+                <button id="advanced-controls-button" type="button" title="Open advanced controls">&#9881; Advanced</button>
+                <button id="hopper-bulk-start" class="primary" type="button">&#9654; Start selected</button>
+                <button id="hopper-bulk-stop" class="danger" type="button">&#9632; Stop selected</button>
+              </div>
+              <div class="hopper-filter-row">
+                <span>Show</span>
+                <div class="state-filter-group" role="group" aria-label="Filter hopper state">
+                  <button class="state-filter active" type="button" data-hopper-state="all" aria-pressed="true">All</button>
+                  <button class="state-filter" type="button" data-hopper-state="running" aria-pressed="false">Running</button>
+                  <button class="state-filter" type="button" data-hopper-state="waiting" aria-pressed="false">Waiting</button>
+                  <button class="state-filter" type="button" data-hopper-state="pinned" aria-pressed="false">Pinned</button>
+                  <button class="state-filter" type="button" data-hopper-state="stopped" aria-pressed="false">Stopped</button>
+                </div>
+              </div>
+              <div class="hopper-table-wrap"><table class="hopper-table"><thead><tr><th class="check-column"><input id="hopper-select-all" type="checkbox" aria-label="Select visible hoppers"></th><th>Hopper</th><th>Account</th><th>Trade</th><th>Server</th><th>Runtime</th><th>State</th><th>Actions</th></tr></thead><tbody id="hopper-body"><tr><td colspan="8" class="empty">Waiting for phone reports</td></tr></tbody></table></div>
+            </section>
+            <div class="workspace-grid">
+              <dialog id="control-drawer" class="control-panel command-drawer" aria-labelledby="control-drawer-title">
+                <div class="drawer-head"><div><p class="eyebrow">OPERATIONS</p><h2 id="control-drawer-title">Advanced controls</h2></div><button id="control-drawer-close" class="icon-button" type="button" title="Close advanced controls" aria-label="Close advanced controls">&#10005;</button></div>
+                <div class="drawer-body"><label for="command-phone">Target phone</label><select id="command-phone"></select><label for="hopper-number">Hopper</label><input id="hopper-number" type="number" min="1" value="1"><div class="button-row"><button data-action="start" class="primary" type="button">Start</button><button data-action="stop" class="danger" type="button">Stop</button><button data-action="restart" type="button">Restart</button></div><div class="button-row"><button data-action="startall" type="button">Start all</button><button data-action="stopall" class="danger" type="button">Stop all</button></div><div class="control-divider"></div><label for="server-number">Server number</label><input id="server-number" type="number" min="1" value="1"><div class="button-row"><button data-action="goto" type="button">Go to</button><button data-action="goto_pin" type="button">Go and hold</button></div><label for="pin-url">Private-server URL</label><input id="pin-url" type="url" placeholder="https://www.roblox.com/share?..."><div class="button-row"><button data-action="pin" type="button">Pin hopper</button><button data-action="all_goto" type="button">Pin all</button></div><button data-action="continue" class="wide-button" type="button">Release pins and continue</button><div class="control-divider"></div><label for="log-lines">Log lines</label><input id="log-lines" type="number" min="1" max="100" value="15"><button data-action="logs" class="wide-button" type="button">Fetch logs</button><p id="command-result" class="command-result" role="status"></p><details class="advanced-controls"><summary>Automation and system</summary><label for="assignment-first">Link range</label><div class="split-inputs"><input id="assignment-first" type="number" min="1" value="1" aria-label="First link"><input id="assignment-last" type="number" min="1" value="20" aria-label="Last link"></div><div class="button-row"><button data-action="assign" type="button">Assign range</button><button data-action="assigns" type="button">Show assignments</button></div><div class="button-row"><button data-action="servers" type="button">Show servers</button><button data-action="unpin" type="button">Unpin hopper</button></div><label for="link-url">Add private-server link</label><input id="link-url" type="url" placeholder="https://www.roblox.com/share?..."><button data-action="link_add" class="wide-button" type="button">Add link to pool</button><div class="control-divider"></div><p class="eyebrow">SCRIPTS</p><label for="script-name">Script name</label><input id="script-name" type="text" placeholder="monitor.lua"><label for="script-url">Script URL</label><input id="script-url" type="url" placeholder="https://raw.githubusercontent.com/..."><div class="button-row"><button data-action="scripts" type="button">List</button><button data-action="script_get" type="button">View</button><button data-action="script_add" type="button">Add</button><button data-action="script_del" class="danger" type="button">Delete</button></div><div class="control-divider"></div><p class="eyebrow">AUTO-TRADE</p><div class="check-grid"><label><input class="trade-category" type="checkbox" value="pets"> Pets</label><label><input class="trade-category" type="checkbox" value="toys"> Toys</label><label><input class="trade-category" type="checkbox" value="food"> Food</label><label><input class="trade-category" type="checkbox" value="transport"> Transport</label><label><input class="trade-category" type="checkbox" value="gifts"> Gifts</label><label><input class="trade-category" type="checkbox" value="stickers"> Stickers</label><label><input class="trade-category" type="checkbox" value="pet_accessories"> Pet accessories</label></div><label for="trade-items">Specific item IDs (comma-separated)</label><input id="trade-items" type="text" placeholder="optional"><label for="trade-usernames">Target usernames (comma-separated)</label><input id="trade-usernames" type="text" placeholder="optional"><button data-action="autotrade" class="wide-button" type="button">Enable auto-trade</button><div class="button-row"><button data-action="pricelog" type="button">Price log</button><button data-action="refetch" type="button">Refresh prices</button></div></details></div>
+              </dialog>
+              <section class="detail-column"><section class="detail-section output-section"><div class="section-heading compact-heading"><div><p class="eyebrow">ACTIVITY</p><h3>Command output</h3></div></div><pre id="output" class="output">No command run yet.</pre></section><section class="detail-section"><div class="section-heading compact-heading"><div><p class="eyebrow">CONNECTED DEVICES</p><h3>Phone reports</h3></div></div><div id="hopper-phone-cards" class="phone-grid"></div></section></section>
+            </div>
           </section>
 
           <section class="page-view" data-page-view="pets" hidden>
@@ -109,6 +140,10 @@
         <div class="dialog-actions"><button id="rotation-cancel" type="button">Cancel</button><button id="rotation-save" class="primary" type="submit">Save to device</button></div>
       </form>
     </dialog>
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="confirm-dialog-body"><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirm-title">Continue?</h2><p id="confirm-message" class="muted"></p><div class="dialog-actions"><button id="confirm-cancel" type="button">Cancel</button><button id="confirm-accept" class="danger" type="button">Continue</button></div></div>
+    </dialog>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
   </section>
   <script src="/assets/app.js"></script>
 </body>

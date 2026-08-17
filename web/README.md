@@ -152,10 +152,13 @@ workspace locations, using root access for cloned package storage when needed.
 The heartbeat must contain `status` and Unix-seconds `ts`. A fresh `completed`
 status advances to the next saved server. Fresh `disconnected` or `error`
 statuses relaunch the current server. Every other fresh status keeps the
-current server running. A missing file or a heartbeat older than 40 seconds
-relaunches the current server immediately and never advances it. Automatic
-retries are limited by a short cooldown to avoid a relaunch loop. Pinned
-hoppers always remain on their pinned server.
+current server running. After Play, the agent first polls the Android package
+with `pidof`. It waits for that package to appear, then waits without a timeout
+for the first fresh in-package heartbeat. Once a fresh heartbeat has been seen,
+a missing file or a heartbeat older than 40 seconds relaunches the current
+server and never advances it. If the package process exits at any point, the
+same server is relaunched. Automatic retries use a short cooldown to avoid a
+relaunch loop. Pinned hoppers always remain on their pinned server.
 
 There is no fixed server timer. The Runtime column starts at the first fresh
 heartbeat written by the script after Roblox launches and continues without a

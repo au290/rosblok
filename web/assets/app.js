@@ -2,18 +2,28 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  const bootView = $("boot-view");
   const loginView = $("login-view");
   const appView = $("app-view");
+  const bootStartedAt = performance.now();
+  const BOOT_MINIMUM_MS = 500;
+  const BOOT_FADE_MS = 160;
+  const POLL_INTERVAL_MS = 3000;
+  const SIDEBAR_COLLAPSED_KEY = "hopper-sidebar-collapsed";
   const pageMeta = {
     summary: { kicker: "EXECUTIVE SUMMARY", title: "Fleet at a glance", subtitle: "A live view of value, hopper capacity, and pet inventory." },
     hoppers: { kicker: "OPERATE", title: "Hopper control", subtitle: "Run each hopper independently across every connected phone." },
     pets: { kicker: "INVENTORY", title: "Pet trackstat", subtitle: "Track count, growth, rarity, and estimated value for every pet." },
   };
   let refreshTimer = null;
+  let refreshInFlight = false;
   let busy = false;
   let currentPage = "summary";
   let currentHoppers = [];
   let rotationHopperId = null;
+  let hopperStateFilter = "all";
+  let confirmationResolver = null;
+  let toastTimer = null;
   const selectedHoppers = new Set();
 
   function escapeHtml(value) {
@@ -30,26 +40,66 @@
   }
 
   async function api(path, options = {}) {
-    const response = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json", ...(options.headers || {}) }, ...options });
+    const { deferLogin = false, ...requestOptions } = options;
+    const response = await fetch(path, { credentials: "same-origin", headers: { "Content-Type": "application/json", ...(requestOptions.headers || {}) }, ...requestOptions });
     let data = {};
     try { data = await response.json(); } catch (_) { /* keep empty response */ }
-    if (response.status === 401) { showLogin(); throw new Error(data.error || "Authentication required"); }
+    if (response.status === 401) { if (!deferLogin) showLogin(); throw new Error(data.error || "Authentication required"); }
     if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
     return data;
   }
 
-  function showLogin(message = "") {
+  function showLogin(message = "", keepBoot = false) {
+    if (!keepBoot) bootView.hidden = true;
     loginView.hidden = false;
     appView.hidden = true;
     $("login-error").textContent = message;
-    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
+    stopPolling();
   }
 
-  function showApp() {
+  function showApp(keepBoot = false) {
+    if (!keepBoot) bootView.hidden = true;
     loginView.hidden = true;
     appView.hidden = false;
     setPage(currentPage);
-    if (!refreshTimer) refreshTimer = setInterval(refresh, 3000);
+    syncPolling();
+  }
+
+  function setSidebarCollapsed(collapsed) {
+    appView.classList.toggle("sidebar-collapsed", collapsed);
+    const button = $("sidebar-collapse-toggle");
+    const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    button.classList.toggle("is-collapsed", collapsed);
+    button.setAttribute("aria-expanded", String(!collapsed));
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    button.innerHTML = `<span class="sidebar-chevron" aria-hidden="true"></span>`;
+    try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed)); } catch (_) { /* storage may be unavailable */ }
+  }
+
+  function restoreSidebarCollapsed() {
+    try { setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"); } catch (_) { setSidebarCollapsed(false); }
+  }
+
+  function pollingIsActive() {
+    return !appView.hidden && document.visibilityState === "visible" && document.hasFocus();
+  }
+
+  function stopPolling() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
+  function syncPolling() {
+    stopPolling();
+    if (!pollingIsActive()) {
+      if (!appView.hidden) $("sidebar-updated").textContent = "Paused while tab is inactive";
+      return;
+    }
+    $("sidebar-updated").textContent = "Live updates";
+    refreshTimer = setInterval(refresh, POLL_INTERVAL_MS);
   }
 
   function setPage(page) {
@@ -99,6 +149,12 @@
     const device = $("hopper-device-filter").value;
     if (phone !== "all" && hopper.phone !== phone) return false;
     if (device !== "all" && hopper.device !== device) return false;
+    const trade = hopper.trade || {};
+    const tradeStatus = String(trade.status || "no script");
+    if (hopperStateFilter === "running" && !(hopper.status === "running" && trade.fresh && tradeStatus !== "no script")) return false;
+    if (hopperStateFilter === "waiting" && !(hopper.status === "starting" || (hopper.status === "running" && (!trade.fresh || tradeStatus === "no script")))) return false;
+    if (hopperStateFilter === "pinned" && hopper.status !== "held") return false;
+    if (hopperStateFilter === "stopped" && !["stopped", "offline"].includes(hopper.status)) return false;
     if (!query) return true;
     const tradeItems = ((hopper.trade || {}).items || []).map((item) => item.name).join(" ");
     return [hopper.device, hopper.account, hopper.package, hopper.target, hopper.phone, tradeItems, `hopper ${hopper.hopper}`].some((value) => String(value || "").toLowerCase().includes(query));
@@ -116,6 +172,11 @@
     currentHoppers = hoppers || [];
     renderHopperDeviceOptions(currentHoppers);
     const visible = currentHoppers.filter(hopperSearchMatch);
+    document.querySelectorAll("[data-hopper-state]").forEach((button) => {
+      const active = button.dataset.hopperState === hopperStateFilter;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
     [...selectedHoppers].forEach((id) => { if (!currentHoppers.some((hopper) => hopper.id === id)) selectedHoppers.delete(id); });
     $("hopper-count").textContent = `${integer(currentHoppers.length)} hopper${currentHoppers.length === 1 ? "" : "s"}`;
     $("hopper-selection-count").textContent = `${integer(selectedHoppers.size)} selected`;
@@ -130,7 +191,7 @@
       const tradeStatus = String(trade.status || "no script");
       const stale = tradeStatus !== "stopped" && !trade.fresh && tradeStatus !== "no script";
       const tradeLabel = tradeStatus === "no script"
-        ? "No script / rejoining"
+        ? (trade.package_ready ? "Waiting for heartbeat" : "Opening package")
         : stale
           ? `Stale / ${integer(trade.age)}s`
           : tradeStatus === "disconnected" || tradeStatus === "error"
@@ -144,7 +205,7 @@
       const meta = trade.meta || {};
       const categories = meta.categories && typeof meta.categories === "object" ? Object.entries(meta.categories).slice(0, 3).map(([name, count]) => `${name}: ${integer(count)}`).join(", ") : "";
       const details = [trade.count != null ? `${integer(trade.count)} trades` : "", itemText, meta.players ? `${meta.players} players` : "", categories].filter(Boolean).join(" / ") || "Waiting for heartbeat";
-      return `<tr><td class="check-column"><input class="hopper-check" data-hopper-id="${escapeHtml(hopper.id)}" type="checkbox" ${selectedHoppers.has(hopper.id) ? "checked" : ""} aria-label="Select hopper ${escapeHtml(hopper.hopper)}"></td><td class="device-cell"><span class="device-name ${hopper.online ? "online" : ""}">${escapeHtml(hopper.device)}</span><span class="cell-secondary">${escapeHtml(hopper.phone)} &middot; hopper ${escapeHtml(hopper.hopper)}</span></td><td class="account-cell"><span class="cell-primary">${escapeHtml(hopper.account)}</span><span class="cell-secondary">${escapeHtml(hopper.package)}</span></td><td class="target-cell"><span class="cell-primary">${escapeHtml(hopper.target)}</span><span class="cell-secondary">${escapeHtml(hopper.server ? "private server" : "rotation")}</span></td><td class="runtime-cell"><span class="cell-primary">${escapeHtml(runtime)}</span><span class="cell-secondary">script session</span></td><td class="trade-cell" title="${escapeHtml(itemTitle)}"><span class="cell-primary trade-state ${tradeClass}">${tradeLabelHtml}</span><span class="cell-secondary">${escapeHtml(details)}</span></td><td><span class="status-label ${escapeHtml(hopper.status)}">${escapeHtml(status)}</span></td><td><div class="row-actions"><button class="configure" data-hopper-action="rotation" data-hopper-id="${escapeHtml(hopper.id)}" title="Edit rotation" aria-label="Edit rotation">&#9881;</button><button class="play" data-hopper-action="start" data-hopper-id="${escapeHtml(hopper.id)}" title="Start hopper" aria-label="Start hopper">&#9654;</button><button class="stop" data-hopper-action="stop" data-hopper-id="${escapeHtml(hopper.id)}" title="Stop hopper" aria-label="Stop hopper">&#9632;</button><button class="restart" data-hopper-action="restart" data-hopper-id="${escapeHtml(hopper.id)}" title="Restart hopper" aria-label="Restart hopper">&#8635;</button></div></td></tr>`;
+      return `<tr class="hopper-row"><td class="check-column"><input class="hopper-check" data-hopper-id="${escapeHtml(hopper.id)}" type="checkbox" ${selectedHoppers.has(hopper.id) ? "checked" : ""} aria-label="Select hopper ${escapeHtml(hopper.hopper)}"></td><td class="device-cell"><span class="device-name ${hopper.online ? "online" : ""}">${escapeHtml(hopper.device)}</span><span class="cell-secondary">${escapeHtml(hopper.phone)} &middot; hopper ${escapeHtml(hopper.hopper)}</span></td><td class="account-cell"><span class="cell-primary">${escapeHtml(hopper.account)}</span><span class="cell-secondary">${escapeHtml(hopper.package)}</span></td><td class="trade-cell" title="${escapeHtml(itemTitle)}"><span class="cell-primary trade-state ${tradeClass}">${tradeLabelHtml}</span><span class="cell-secondary">${escapeHtml(details)}</span></td><td class="target-cell"><span class="cell-primary">${escapeHtml(hopper.target)}</span><span class="cell-secondary">${escapeHtml(hopper.server ? "private server" : "rotation")}</span></td><td class="runtime-cell"><span class="cell-primary">${escapeHtml(runtime)}</span><span class="cell-secondary">script session</span></td><td class="state-cell"><span class="status-label ${escapeHtml(hopper.status)}">${escapeHtml(status)}</span></td><td class="action-cell"><div class="row-actions"><button class="configure" data-hopper-action="rotation" data-hopper-id="${escapeHtml(hopper.id)}" title="Edit rotation" aria-label="Edit rotation">&#9881;</button><button class="play" data-hopper-action="start" data-hopper-id="${escapeHtml(hopper.id)}" title="Start hopper" aria-label="Start hopper">&#9654;</button><button class="stop" data-hopper-action="stop" data-hopper-id="${escapeHtml(hopper.id)}" title="Stop hopper" aria-label="Stop hopper">&#9632;</button><button class="restart" data-hopper-action="restart" data-hopper-id="${escapeHtml(hopper.id)}" title="Restart hopper" aria-label="Restart hopper">&#8635;</button></div></td></tr>`;
     }).join("");
   }
 
@@ -196,6 +257,7 @@
       $("rotation-result").textContent = response.result || "Rotation saved.";
       $("command-result").textContent = response.result || "Rotation saved.";
       $("output").textContent = response.result || "Rotation saved.";
+      showToast(response.result || "Rotation saved.");
       busy = false;
       await refresh();
       const saved = hopperById(rotationHopperId);
@@ -218,8 +280,6 @@
     $("metric-hoppers").textContent = integer(hoppers.length);
     $("metric-pets").textContent = integer(summary.pets);
     $("metric-online").textContent = `${integer(summary.online)}/${integer(summary.phones)}`;
-    $("metric-bucks").textContent = integer(summary.bucks);
-    $("metric-eggs").textContent = integer(summary.eggs);
   }
 
   function renderCharts(pets) {
@@ -279,64 +339,121 @@
     }).join("");
   }
 
-  async function refresh() {
-    if (busy || appView.hidden) return;
-    try {
-      const data = await api("/api/status?phone=all");
-      renderPhoneOptions(data.available_phones || data.phones.map((phone) => phone.phone));
-      renderSummary(data.summary, data.hoppers || []);
-      renderCharts(data.pets || []);
-      renderHoppers(data.hoppers || []);
-      if ($("rotation-dialog").open && rotationHopperId) {
-        const hopper = hopperById(rotationHopperId);
-        if (hopper) renderSavedRotation(hopper);
-      }
-      renderPhones(data.phones || []);
-      renderPhones(data.phones || [], "hopper-phone-cards");
-      renderInventory(data.inventory);
-      renderPets(data.pets);
-      const updated = `Updated ${new Date().toLocaleTimeString()}`;
-      $("last-updated").textContent = updated;
-      $("sidebar-updated").textContent = updated.replace("Updated ", "");
-    } catch (error) {
-      if (!appView.hidden) { $("last-updated").textContent = error.message; $("sidebar-updated").textContent = "Sync error"; }
+  function renderStatus(data) {
+    const phones = data.phones || [];
+    renderPhoneOptions(data.available_phones || phones.map((phone) => phone.phone));
+    renderSummary(data.summary, data.hoppers || []);
+    renderCharts(data.pets || []);
+    renderHoppers(data.hoppers || []);
+    if ($("rotation-dialog").open && rotationHopperId) {
+      const hopper = hopperById(rotationHopperId);
+      if (hopper) renderSavedRotation(hopper);
     }
+    renderPhones(phones);
+    renderPhones(phones, "hopper-phone-cards");
+    renderInventory(data.inventory);
+    renderPets(data.pets);
+    $("sidebar-updated").textContent = pollingIsActive() ? "Live updates" : "Paused while tab is inactive";
+  }
+
+  async function refresh() {
+    if (busy || refreshInFlight || !pollingIsActive()) return;
+    refreshInFlight = true;
+    try {
+      renderStatus(await api("/api/status?phone=all"));
+    } catch (error) {
+      if (!appView.hidden) $("sidebar-updated").textContent = "Sync error";
+    } finally { refreshInFlight = false; }
   }
 
   async function restoreSession() {
     try {
       // The HttpOnly cookie is sent automatically; this avoids asking for the
       // token again when the page is refreshed during the same server session.
-      await api("/api/status?phone=all");
-      showApp();
-      await refresh();
+      const data = await api("/api/status?phone=all", { deferLogin: true });
+      renderStatus(data);
+      await finishBoot(() => showApp(true));
     } catch (_) {
-      showLogin();
+      await finishBoot(() => showLogin("", true));
     }
+  }
+
+  async function finishBoot(render) {
+    const remaining = Math.max(0, BOOT_MINIMUM_MS - (performance.now() - bootStartedAt));
+    if (remaining) await new Promise((resolve) => setTimeout(resolve, remaining));
+    render();
+    bootView.classList.add("is-leaving");
+    await new Promise((resolve) => setTimeout(resolve, BOOT_FADE_MS));
+    bootView.hidden = true;
+    bootView.classList.remove("is-leaving");
+  }
+
+  function openControlDrawer() {
+    const drawer = $("control-drawer");
+    if (!drawer.open) drawer.showModal();
+  }
+
+  function closeControlDrawer() {
+    const drawer = $("control-drawer");
+    if (drawer.open) drawer.close();
+  }
+
+  function showToast(message, tone = "success") {
+    const region = $("toast-region");
+    region.innerHTML = `<div class="toast toast-${escapeHtml(tone)}">${escapeHtml(message)}</div>`;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { region.innerHTML = ""; }, 4200);
+  }
+
+  function confirmAction(title, message, confirmLabel) {
+    const dialog = $("confirm-dialog");
+    $("confirm-title").textContent = title;
+    $("confirm-message").textContent = message;
+    $("confirm-accept").textContent = confirmLabel;
+    dialog.showModal();
+    return new Promise((resolve) => { confirmationResolver = resolve; });
+  }
+
+  function resolveConfirmation(accepted) {
+    const dialog = $("confirm-dialog");
+    if (dialog.open) dialog.close();
+    if (confirmationResolver) confirmationResolver(accepted);
+    confirmationResolver = null;
+  }
+
+  async function confirmCommand(action, count = 1) {
+    if (action === "restart") return confirmAction("Restart hopper?", "The Roblox package will be stopped and launched again on the current server.", "Restart");
+    if (action === "stopall") return confirmAction("Stop every hopper?", "Every active hopper on the selected phone will be stopped.", "Stop all");
+    if (action === "all_goto") return confirmAction("Pin every hopper?", "Every hopper on the selected phone will be sent to this private server and held there.", "Pin all");
+    if (action === "stop" && count > 1) return confirmAction("Stop selected hoppers?", `${count} hoppers will be stopped.`, "Stop selected");
+    return true;
   }
 
   async function sendCommand(action, extra = {}) {
     if (busy) return;
+    if (!(await confirmCommand(action))) return;
     busy = true;
     $("command-result").textContent = "Sending...";
     try {
       const response = await api("/api/command", { method: "POST", body: JSON.stringify({ phone: commandPhone(), action, ...extra }) });
       $("command-result").textContent = response.result || "Command accepted.";
       $("output").textContent = response.result || "Command accepted.";
+      showToast(response.result || "Command accepted.");
       await refresh();
-    } catch (error) { $("command-result").textContent = error.message; $("output").textContent = error.message; }
+    } catch (error) { $("command-result").textContent = error.message; $("output").textContent = error.message; showToast(error.message, "error"); }
     finally { busy = false; }
   }
 
   async function sendHopperCommands(action, hoppers) {
     if (busy || !hoppers.length) return;
+    if (!(await confirmCommand(action, hoppers.length))) return;
     busy = true;
     $("command-result").textContent = `Sending ${action} to ${hoppers.length} hopper${hoppers.length === 1 ? "" : "s"}...`;
     try {
       const responses = await Promise.all(hoppers.map((hopper) => api("/api/command", { method: "POST", body: JSON.stringify({ phone: hopper.phone, action, hopper: hopper.hopper }) })));
       const output = responses.map((response) => response.result).join("\n");
-      $("command-result").textContent = output || "Command accepted."; $("output").textContent = output || "Command accepted."; selectedHoppers.clear(); await refresh();
-    } catch (error) { $("command-result").textContent = error.message; $("output").textContent = error.message; }
+      $("command-result").textContent = output || "Command accepted."; $("output").textContent = output || "Command accepted."; showToast(output || "Command accepted."); selectedHoppers.clear(); await refresh();
+    } catch (error) { $("command-result").textContent = error.message; $("output").textContent = error.message; showToast(error.message, "error"); }
     finally { busy = false; }
   }
 
@@ -358,13 +475,22 @@
 
   $("login-form").addEventListener("submit", async (event) => { event.preventDefault(); $("login-error").textContent = ""; try { await api("/api/login", { method: "POST", body: JSON.stringify({ token: $("login-token").value }) }); $("login-token").value = ""; showApp(); await refresh(); } catch (error) { $("login-error").textContent = error.message; } });
   $("logout-button").addEventListener("click", async () => { try { await api("/api/logout", { method: "POST" }); } catch (_) { /* already logged out */ } showLogin(); });
-  $("refresh-button").addEventListener("click", refresh);
+  $("sidebar-collapse-toggle").addEventListener("click", () => setSidebarCollapsed(!appView.classList.contains("sidebar-collapsed")));
+  document.addEventListener("visibilitychange", () => { syncPolling(); if (pollingIsActive()) refresh(); });
+  window.addEventListener("focus", () => { syncPolling(); if (pollingIsActive()) refresh(); });
+  window.addEventListener("blur", syncPolling);
   $("sidebar-toggle").addEventListener("click", openSidebar);
   $("sidebar-backdrop").addEventListener("click", closeSidebar);
+  $("advanced-controls-button").addEventListener("click", openControlDrawer);
+  $("control-drawer-close").addEventListener("click", closeControlDrawer);
+  $("confirm-cancel").addEventListener("click", () => resolveConfirmation(false));
+  $("confirm-accept").addEventListener("click", () => resolveConfirmation(true));
+  $("confirm-dialog").addEventListener("cancel", (event) => { event.preventDefault(); resolveConfirmation(false); });
   document.querySelectorAll("[data-page]").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
   $("hopper-search").addEventListener("input", () => renderHoppers(currentHoppers));
   $("hopper-phone-filter").addEventListener("change", () => renderHoppers(currentHoppers));
   $("hopper-device-filter").addEventListener("change", () => renderHoppers(currentHoppers));
+  document.querySelectorAll("[data-hopper-state]").forEach((button) => button.addEventListener("click", () => { hopperStateFilter = button.dataset.hopperState || "all"; renderHoppers(currentHoppers); }));
   $("hopper-select-all").addEventListener("change", (event) => { currentHoppers.filter(hopperSearchMatch).forEach((hopper) => { if (event.target.checked) selectedHoppers.add(hopper.id); else selectedHoppers.delete(hopper.id); }); renderHoppers(currentHoppers); });
   $("hopper-body").addEventListener("change", (event) => { if (!event.target.classList.contains("hopper-check")) return; if (event.target.checked) selectedHoppers.add(event.target.dataset.hopperId); else selectedHoppers.delete(event.target.dataset.hopperId); renderHoppers(currentHoppers); });
   $("hopper-body").addEventListener("click", (event) => { const button = event.target.closest("[data-hopper-action]"); if (!button) return; const hopper = hopperById(button.dataset.hopperId); if (!hopper) return; if (button.dataset.hopperAction === "rotation") openRotation(hopper); else sendHopperCommands(button.dataset.hopperAction, [hopper]); });
@@ -375,5 +501,6 @@
   $("rotation-cancel").addEventListener("click", closeRotation);
   $("rotation-dialog").addEventListener("cancel", () => { rotationHopperId = null; });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => sendCommand(button.dataset.action, actionPayload(button.dataset.action))));
+  restoreSidebarCollapsed();
   restoreSession();
 })();

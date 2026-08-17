@@ -183,10 +183,12 @@ def _runtime(n: int) -> dict:
         if state is None:
             state = {
                 "hopper": n, "package": package_for(n), "desired": False,
-                "actual": False, "held": False, "index": None,
+                "actual": False, "package_seen_running": False,
+                "held": False, "index": None,
                 "link": "", "deep_link": "",
                 "last_launch": 0.0, "last_health": 0.0,
                 "trade": None, "trade_launch_at": 0.0, "trade_started_at": 0.0,
+                "trade_session_seen": False,
                 "trade_retry_at": 0.0, "trade_file": "",
                 "logs": deque(maxlen=80),
             }
@@ -223,6 +225,17 @@ def app_running(package: str) -> bool:
         return False
     result = _su(f"pidof {shlex.quote(package)}", timeout=8)
     return bool(result and result.returncode == 0 and result.stdout.strip())
+
+
+def _package_ready_locked(state: dict, now: float) -> bool:
+    """Track package readiness separately from the addon heartbeat."""
+    if not state.get("package_seen_running") or now - state.get("last_health", 0) >= 5:
+        running = app_running(state.get("package", ""))
+        state["last_health"] = now
+        state["actual"] = running
+        if running:
+            state["package_seen_running"] = True
+    return bool(state.get("package_seen_running") and state.get("actual"))
 
 
 _TRADE_FILE_RE = re.compile(r"^[^/\\]+_winteraddons\.json$", re.I)
@@ -419,7 +432,9 @@ def _refresh_trade_locked(state: dict, now: float | None = None) -> dict | None:
         trade["previous_session"] = True
     if trade is not None and state.get("trade_file", "") != previous_file:
         state["trade_started_at"] = 0.0
+        state["trade_session_seen"] = False
     if trade is not None and trade.get("fresh") and not trade.get("previous_session"):
+        state["trade_session_seen"] = True
         if not state.get("trade_started_at"):
             state["trade_started_at"] = float(trade.get("ts", now))
         runtime = max(0, int(now - state["trade_started_at"]))
@@ -432,6 +447,8 @@ def _refresh_trade_locked(state: dict, now: float | None = None) -> dict | None:
 
 def _trade_needs_retry(state: dict, trade: dict | None, now: float) -> bool:
     if now < state.get("trade_retry_at", 0):
+        return False
+    if not state.get("trade_session_seen"):
         return False
     if trade and trade.get("fresh"):
         return str(trade.get("status", "")).lower() in {"disconnected", "error"}
@@ -517,7 +534,9 @@ def _launch_locked(
     launched_at = time.time()
     state.update({"actual": True, "link": str(link).strip(), "deep_link": target,
                   "last_launch": launched_at, "last_health": launched_at,
-                  "trade": None, "trade_launch_at": launched_at,
+                  "package_seen_running": False, "trade": None,
+                  "trade_launch_at": launched_at,
+                  "trade_session_seen": False,
                   "trade_started_at": 0.0, "trade_retry_at": retry_at})
     if index is not None:
         state["index"] = index
@@ -569,9 +588,11 @@ def stop_hopper(n: int) -> str:
         package = state["package"]
         _su(f"am force-stop {shlex.quote(package)}", timeout=15)
         state["actual"] = False
+        state["package_seen_running"] = False
         state["trade"] = None
         state["trade_launch_at"] = 0
         state["trade_started_at"] = 0
+        state["trade_session_seen"] = False
         state["trade_retry_at"] = 0
         _log(state, "stopped")
     return f"stopped hopper{n}" if was_running else f"hopper{n} not started"
@@ -602,6 +623,23 @@ def tick_hoppers() -> None:
                 _log(state, "stopped: rotation has no servers")
                 continue
             try:
+                package_ready = _package_ready_locked(state, now)
+                if not package_ready:
+                    if state.get("package_seen_running") and now >= state.get("trade_retry_at", 0):
+                        retry_at = now + TRADE_RETRY_COOLDOWN
+                        index = state.get("index")
+                        reason = "package exited; relaunching pinned server" if state["held"] else (
+                            f"package exited; relaunching RF{index + 1}" if index is not None
+                            else "package exited; relaunching current server"
+                        )
+                        _log(state, reason)
+                        if state["held"]:
+                            _launch_locked(
+                                state, state["link"], index=state.get("index"), label="PIN", retry_at=retry_at
+                            )
+                        elif index is not None:
+                            _launch_index_locked(state, index, retry_at=retry_at)
+                    continue
                 trade = _refresh_trade_locked(state, now)
                 if state["held"]:
                     if _trade_needs_retry(state, trade, now):
@@ -613,14 +651,12 @@ def tick_hoppers() -> None:
                         _launch_locked(
                             state, state["link"], index=state.get("index"), label="PIN", retry_at=retry_at
                         )
-                    elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
-                        state["actual"] = app_running(state["package"])
-                        state["last_health"] = now
-                        if not state["actual"]:
-                            _launch_locked(state, state["link"], label="PIN")
                     continue
                 if state["index"] is None:
                     _launch_index_locked(state, 0)
+                    continue
+
+                if not state.get("trade_session_seen"):
                     continue
 
                 status = str((trade or {}).get("status", "")).lower()
@@ -644,11 +680,6 @@ def tick_hoppers() -> None:
                     retry_at = now + TRADE_RETRY_COOLDOWN
                     _log(state, f"{reason}; relaunching RF{state['index'] + 1}")
                     _launch_index_locked(state, state["index"], retry_at=retry_at)
-                elif now - state["last_health"] >= 5 and now - state["last_launch"] >= 5:
-                    state["actual"] = app_running(state["package"])
-                    state["last_health"] = now
-                    if not state["actual"]:
-                        _launch_index_locked(state, state["index"] or 0)
             except Exception as exc:
                 state["actual"] = False
                 _log(state, f"runtime error: {exc}")
@@ -947,6 +978,8 @@ def build_board():
         runtime = meta.get("runtime")
         if isinstance(runtime, (int, float)) and not isinstance(runtime, bool) and runtime >= 0:
             timer = f"{int(runtime):>5}s runtime"
+        elif not state.get("package_seen_running"):
+            timer = "opening package"
         else:
             timer = "waiting for script"
         rows.append(f"{n:>2}  {srv or '??':<5} {timer}")
@@ -966,10 +999,11 @@ def trade_snapshot() -> dict:
                 snapshot[str(n)] = {"status": "stopped", "fresh": False}
                 continue
             trade = _refresh_trade_locked(state, now)
-            if trade is None:
+            if trade is None or not state.get("trade_session_seen"):
                 snapshot[str(n)] = {
                     "status": "no script",
                     "fresh": False,
+                    "package_ready": bool(state.get("package_seen_running") and state.get("actual")),
                 }
             else:
                 snapshot[str(n)] = dict(trade)

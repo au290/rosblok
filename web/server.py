@@ -177,6 +177,8 @@ def _normalise_trade_report(value: object) -> dict | None:
     if not status:
         return None
     result: dict = {"status": status, "fresh": bool(value.get("fresh", False))}
+    if isinstance(value.get("package_ready"), bool):
+        result["package_ready"] = value["package_ready"]
     for key in ("ts", "age", "count"):
         if key not in value or isinstance(value[key], bool):
             continue
