@@ -747,9 +747,13 @@ def _pets_totals(phone: str) -> dict[str, dict]:
     totals: dict[str, dict] = {}
     for data in _inventory_rows(phone):
         for key, value in ((data.get("pets", {}).get("by_type", {}) or {}).items()):
-            item = totals.setdefault(key, {"count": 0, "fg": 0})
+            item = totals.setdefault(key, {"count": 0, "fg": 0, "display_name": "", "kind": str(key)})
             item["count"] += int(value.get("count", 0) or 0)
             item["fg"] += int(value.get("fg", 0) or 0)
+            if not item.get("display_name") and isinstance(value.get("display_name"), str):
+                item["display_name"] = value["display_name"].strip()
+            if isinstance(value.get("kind"), str) and value["kind"].strip():
+                item["kind"] = value["kind"].strip()
     return totals
 
 
@@ -767,18 +771,21 @@ def _all_rarities(phone: str) -> dict:
     return result
 
 
-def _display_name(kind: str) -> str:
-    stripped = re.sub(r"^.*?\d{4}_", "", kind)
-    return stripped.replace("_", " ").title()
+def _display_name(kind: str, official: object = None) -> str:
+    """Use the monitor's verified ItemDB name; keep old payloads readable."""
+    if isinstance(official, str) and official.strip():
+        return official.strip()
+    return str(kind)
 
 
-def _group_value(real_name: str, variant: str, count: int, prices: dict) -> tuple[float, bool]:
-    if variant == "default":
-        price = prices.get(f"{real_name}|default")
-        quantity = count
-    else:
-        price = prices.get(f"{real_name}|mega_neon")
-        quantity = count / 4 if variant == "neon" else count
+def _group_value(real_name: str, variant: str, count: int, prices: dict, official_name: str = "") -> tuple[float, bool]:
+    price_variant = "default" if variant == "default" else "mega_neon"
+    price = None
+    for candidate in dict.fromkeys(name for name in (official_name.strip(), real_name.strip()) if name):
+        price = prices.get(f"{candidate}|{price_variant}")
+        if price is not None:
+            break
+    quantity = count if variant == "default" else (count / 4 if variant == "neon" else count)
     if price is None:
         return 0.0, False
     unit = math.floor(float(price) * 0.75 * 100 + 1e-6) / 100
@@ -791,7 +798,7 @@ def _value_summary(phone: str) -> dict:
     priced = unpriced = 0
     for key, item in _pets_totals(phone).items():
         real_name, variant = _key_variant(key)
-        value, ok = _group_value(real_name, variant, item["count"], prices)
+        value, ok = _group_value(real_name, variant, item["count"], prices, item.get("display_name", ""))
         if ok:
             total += value
             priced += item["count"]
@@ -902,14 +909,15 @@ def _status_payload(phone: str) -> dict:
     prices = _all_prices(phone)
     for key, item in sorted(_pets_totals(phone).items(), key=lambda pair: -pair[1]["count"]):
         real_name, variant = _key_variant(key)
-        pet_value, priced = _group_value(real_name, variant, item["count"], prices)
+        pet_value, priced = _group_value(real_name, variant, item["count"], prices, item.get("display_name", ""))
+        official_name = _display_name(real_name, item.get("display_name"))
         pets.append(
             {
-                "name": _display_name(real_name),
+                "name": official_name,
                 "variant": variant,
                 "count": item["count"],
                 "full_grown": item["fg"],
-                "rarity": rarities.get(real_name, ""),
+                "rarity": rarities.get(item.get("display_name", ""), rarities.get(real_name, "")),
                 "value_usd": pet_value,
                 "priced": priced,
             }

@@ -33,9 +33,9 @@ def payload(account: str) -> dict:
                     "count": 4,
                     "eggs": 1,
                     "by_type": {
-                        "dog": {"count": 2, "fg": 1, "kind": "dog", "neon": False, "mega": False},
-                        "cat (neon)": {"count": 1, "fg": 1, "kind": "cat", "neon": True, "mega": False},
-                        "dragon (mega neon)": {"count": 1, "fg": 1, "kind": "dragon", "neon": False, "mega": True},
+                        "dog": {"count": 2, "fg": 1, "kind": "dog", "display_name": "Dog", "neon": False, "mega": False},
+                        "cat (neon)": {"count": 1, "fg": 1, "kind": "cat", "display_name": "Cat", "neon": True, "mega": False},
+                        "dragon (mega neon)": {"count": 1, "fg": 1, "kind": "dragon", "display_name": "Dragon", "neon": False, "mega": True},
                     },
                     "eggs_by_type": {"basic_egg": 1},
                 },

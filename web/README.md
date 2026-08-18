@@ -251,8 +251,10 @@ local KEY = "the-same-value-as-web-config"
 ```
 
 Use one monitor per Roblox account. Reports are merged by account name and are
-independent of the phone-agent fleet, so no phone ID is required. Accounts that
-stop reporting are removed after the inventory grace period. The monitor only
+independent of the phone-agent fleet, so no phone ID is required. Each pet is
+resolved through the live `ClientDB.ItemDB` table and sends its official
+`display_name` alongside the canonical `kind`; no ID-to-name guessing is used.
+Accounts that stop reporting are removed after the inventory grace period. The monitor only
 reports inventory; hopper lifecycle commands, board/health data, and the
 current StarPets price worker still come from `agent.py`. Run the agent when
 those features are needed. If you only need the inventory pages, the monitor
