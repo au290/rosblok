@@ -953,7 +953,7 @@ def device_health() -> str:
     ram  = f"{m.group(2)}/{m.group(1)}MB" if m else "?"
     cpu  = load.group() if load else "?"
     gb   = f"{int(disk.group(1)) / 1048576:.1f}G" if disk else "?"
-    return f"🧠 {ram} free · ⚙️ load {cpu} · 💾 {gb} free"
+    return f"RAM {ram} free | CPU load {cpu} | Storage {gb} free"
 
 
 def build_board():
