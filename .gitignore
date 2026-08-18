@@ -10,6 +10,7 @@
 !setup-vps.sh
 !setup-vps.ps1
 !monitor_adoptme.lua
+!debug_adoptme_pets.lua
 !README.md
 !web/
 !web/.gitignore

@@ -219,6 +219,13 @@ the next agent poll restores the saved links in the web dashboard.
 
 ## Direct Adopt Me inventory reporting
 
+For a read-only inventory inspection, install `debug_adoptme_pets.lua` in the
+executor and run it while Adopt Me is open. It prints each coded `kind`, checks
+common display-name fields and local pet definition modules, and optionally
+writes `adoptme_pet_debug.json` or copies the JSON to the clipboard. It does
+not post to the VPS. Use the discovered mapping to update the monitor only
+after verifying the names.
+
 To test Trackstat without opening Roblox, run the synthetic client from the
 repository root. It sends one sample account to the public web endpoint:
 
