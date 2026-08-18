@@ -215,7 +215,10 @@ def submit(config: dict[str, str], online_accounts: int, total_accounts: int, mo
         timeout=20,
     )
     if not response.ok:
-        raise ListenerError(f"dashboard submit failed (HTTP {response.status_code})")
+        raise ListenerError(
+            f"dashboard submit failed (HTTP {response.status_code}) at "
+            f"{target_url}/api/rejoin/stats"
+        )
 
 
 def sample(client: RejoinClient, config: dict[str, str]) -> tuple[int, int, str]:

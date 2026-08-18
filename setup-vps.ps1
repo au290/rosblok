@@ -230,7 +230,8 @@ if (-not $SkipRejoinListener) {
     if (-not [string]::IsNullOrWhiteSpace($RejoinAccountDb)) { Set-RejoinValue "ACCOUNT_DB" $RejoinAccountDb }
     if ((Get-RejoinValue "ACCOUNT_DB") -eq "C:\path\to\accountdb.txt") { Set-RejoinValue "ACCOUNT_DB" "" }
     if ([string]::IsNullOrWhiteSpace((Get-RejoinValue "TOTAL_ACCOUNTS"))) { Set-RejoinValue "TOTAL_ACCOUNTS" "observed" }
-    if ([string]::IsNullOrWhiteSpace((Get-RejoinValue "TARGET_URL")) -or (Get-RejoinValue "TARGET_URL") -eq "https://agent.kqing.web.id") {
+    $rejoinTargetUrl = Get-RejoinValue "TARGET_URL"
+    if ([string]::IsNullOrWhiteSpace($rejoinTargetUrl) -or $rejoinTargetUrl -match '^https://agent\.kqing\.web\.id/?$') {
         Set-RejoinValue "TARGET_URL" "http://127.0.0.1:$Port"
     }
     Set-RejoinValue "TARGET_KEY_FILE" "config.txt"
