@@ -278,8 +278,9 @@ python rejoin_listener.py --once
 python rejoin_listener.py
 ```
 
-Fill `SOURCE_SCRIPT_KEY`, `SOURCE_PASSWORD`, and `ACCOUNT_DB` (or use
-`TOTAL_ACCOUNTS=observed`) in `rejoin_listener.txt`. The Windows installer
+Fill `SOURCE_SCRIPT_KEY` and `SOURCE_PASSWORD` in `rejoin_listener.txt`.
+Leave `ACCOUNT_DB` blank to derive the total from the source API, or set it to
+an actual local account database path and use its username count. The Windows installer
 sets `TARGET_URL` to the local server and `TARGET_KEY_FILE=config.txt`, so it
 uses the web server `KEY` without copying it. `SOURCE_CREDENTIALS_FILE` can
 point at a local credentials script such as `../resource/nega.py` instead.

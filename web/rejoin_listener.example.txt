@@ -8,7 +8,8 @@ SOURCE_CREDENTIALS_FILE=../resource/nega.py
 
 # Preferred: local user:password:cookie database. Only the first username field
 # is counted and usernames are never sent to the Hopper Fleet web server.
-ACCOUNT_DB=C:\path\to\accountdb.txt
+# Optional. Leave blank when the source API is the account total.
+ACCOUNT_DB=
 
 # Use this only when ACCOUNT_DB is intentionally blank.
 TOTAL_ACCOUNTS=observed
