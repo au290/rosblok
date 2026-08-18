@@ -221,12 +221,12 @@ the next agent poll restores the saved links in the web dashboard.
 
 For a read-only inventory inspection, install `debug_adoptme_pets.lua` in the
 executor and run it while Adopt Me is open. It prints each coded `kind`, checks
-common display-name fields and local pet definition modules. When the game
-does not expose a definition table, it also derives a readable name from the
-ID suffix (for example `summer_2026_acorn_knight` becomes `Acorn Knight`). It
-optionally writes `adoptme_pet_debug.json` or copies the JSON to the clipboard.
-It does not post to the VPS. Keep the original `kind` for price lookups and
-verify derived names before treating them as official localization.
+common display-name fields, the replicated `ClientDB` item databases, and
+already-loaded game tables. It never derives a name from the ID. If the game
+does not expose a definition, it reports `<not found in game data>` instead of
+guessing. It optionally writes `adoptme_pet_debug.json` or copies the JSON to
+the clipboard. It does not post to the VPS. Keep the original `kind` for
+internal identity and use only confirmed `display_name` values for StarPets.
 
 To test Trackstat without opening Roblox, run the synthetic client from the
 repository root. It sends one sample account to the public web endpoint:

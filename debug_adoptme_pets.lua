@@ -54,17 +54,6 @@ local function shallowFields(value)
     return table.concat(fields, ", ")
 end
 
-local function displayNameFromKind(kind)
-    local name = tostring(kind or "?")
-    -- Event/version prefixes are part of the internal ID, not the display name.
-    name = name:gsub("^.-%d%d%d%d_", "")
-    name = name:gsub("_+", " ")
-    name = name:gsub("(%a)([%w']*)", function(first, rest)
-        return string.upper(first) .. string.lower(rest)
-    end)
-    return name
-end
-
 local function findDefinition(root, wanted, depth, seen)
     if type(root) ~= "table" or depth > 5 then return nil end
     seen = seen or {}
@@ -72,9 +61,19 @@ local function findDefinition(root, wanted, depth, seen)
     seen[root] = true
 
     for key, value in pairs(root) do
-        if tostring(key) == wanted and type(value) == "table" then
-            local name = firstString(value, { "name", "display_name", "displayName", "localized_name", "label", "title" })
-            if name then return name end
+        if tostring(key) == wanted then
+            if type(value) == "string" and value ~= "" then
+                return value
+            end
+            if type(value) == "table" then
+                local name = firstString(value, { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                if name then return name end
+                for _, nestedKey in ipairs({ "data", "info", "item", "pet", "definition" }) do
+                    local nested = value[nestedKey]
+                    local nestedName = firstString(nested, { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                    if nestedName then return nestedName end
+                end
+            end
         end
         if type(value) == "table" then
             local found = findDefinition(value, wanted, depth + 1, seen)
@@ -86,6 +85,12 @@ end
 
 local function loadPetDefinition(kind)
     local moduleNames = {
+        ClientDB = true,
+        InventoryDB = true,
+        ItemDB = true,
+        InventoryData = true,
+        ItemData = true,
+        PetDB = true,
         Pets = true,
         PetData = true,
         PetDefinitions = true,
@@ -102,6 +107,27 @@ local function loadPetDefinition(kind)
                         if found then return found, descendant:GetFullName() end
                     end
                 end
+            end
+        end
+    end
+    return nil
+end
+
+local function loadedTableDefinition(kind)
+    -- Some executors expose the already-loaded ClientDB table through getgc,
+    -- even when its ModuleScript is hidden or renamed.
+    if type(getgc) ~= "function" then return nil end
+    local ok, objects = pcall(function() return getgc(true) end)
+    if not ok or type(objects) ~= "table" then return nil end
+    for _, object in pairs(objects) do
+        if type(object) == "table" then
+            local value = rawget(object, kind)
+            if type(value) == "string" and value ~= "" then
+                return value, "getgc"
+            end
+            if type(value) == "table" then
+                local name = firstString(value, { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                if name then return name, "getgc" end
             end
         end
     end
@@ -126,7 +152,10 @@ for _, item in pairs(pets) do
             local props = type(item.properties) == "table" and item.properties or {}
             local propertyName = firstString(props, { "name", "display_name", "displayName", "localized_name", "label", "title" })
             local definition, modulePath = loadPetDefinition(kind)
-            local displayName = direct or propertyName or definition or displayNameFromKind(kind)
+            if not definition then
+                definition, modulePath = loadedTableDefinition(kind)
+            end
+            local displayName = direct or propertyName or definition
             local row = {
                 kind = kind,
                 id = item.id,
@@ -139,8 +168,8 @@ for _, item in pairs(pets) do
             }
             rows[#rows + 1] = row
             print(string.format(
-                "[pet-debug] %s | kind=%s | direct=%s | property=%s | definition=%s",
-                displayName,
+                "[pet-debug] display=%s | kind=%s | direct=%s | property=%s | definition=%s",
+                displayName or "<not found in game data>",
                 kind,
                 direct or "-",
                 propertyName or "-",
