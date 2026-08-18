@@ -35,6 +35,15 @@ automatic startup:
 $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.ps1" -UseBasicParsing -ErrorAction Stop -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
+Because this repository is private, the anonymous command above returns
+`404`. Use this authenticated bootstrap instead. Set `GITHUB_TOKEN` to a
+fine-grained GitHub token with read-only **Contents** access to this
+repository, or enter it when prompted:
+
+```powershell
+$token=$env:GITHUB_TOKEN; if (-not $token) { $token=Read-Host 'GitHub read-only token' }; $h=@{Authorization="Bearer $token";Accept='application/vnd.github.raw';'User-Agent'='panen-bootstrap'}; $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://api.github.com/repos/au290/rosblok/contents/setup-vps.ps1?ref=main" -Headers $h -UseBasicParsing -OutFile $p; $env:PANEN_GITHUB_TOKEN=$token; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
 Run the same line whenever you want to update the VPS. It restarts the web
 task and, when Rejoin credentials are present, the Rejoin listener task too.
 The listener config is kept at `web\rejoin_listener.txt` and is ignored by Git.

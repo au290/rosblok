@@ -22,6 +22,9 @@ For the Windows 11 VPS, open PowerShell and run:
 $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.ps1" -UseBasicParsing -ErrorAction Stop -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
+If the GitHub repository is private, use the authenticated bootstrap from the
+root `README.md`; an unauthenticated raw GitHub URL returns `404` by design.
+
 The installer uses `$env:PANEN_DIR` when set and otherwise installs to
 `$env:USERPROFILE\panen`. Run PowerShell as Administrator to register an
 at-startup scheduled task; without elevation it installs a per-user Startup

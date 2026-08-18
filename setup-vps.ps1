@@ -5,6 +5,7 @@ param(
     [string]$RejoinScriptKey = $(if ($env:PANEN_REJOIN_SCRIPT_KEY) { $env:PANEN_REJOIN_SCRIPT_KEY } else { "" }),
     [string]$RejoinPassword = $(if ($env:PANEN_REJOIN_PASSWORD) { $env:PANEN_REJOIN_PASSWORD } else { "" }),
     [string]$RejoinAccountDb = $(if ($env:PANEN_REJOIN_ACCOUNT_DB) { $env:PANEN_REJOIN_ACCOUNT_DB } else { "" }),
+    [string]$GitHubToken = $(if ($env:PANEN_GITHUB_TOKEN) { $env:PANEN_GITHUB_TOKEN } else { "" }),
     [switch]$SkipRejoinListener
 )
 
@@ -13,6 +14,10 @@ $ProgressPreference = "SilentlyContinue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $Raw = "https://raw.githubusercontent.com/au290/rosblok/main"
+$DownloadHeaders = @{ "User-Agent" = "panen-vps-setup" }
+if (-not [string]::IsNullOrWhiteSpace($GitHubToken)) {
+    $DownloadHeaders["Authorization"] = "Bearer $GitHubToken"
+}
 $WebDir = Join-Path $InstallDir "web"
 $ConfigPath = Join-Path $WebDir "config.txt"
 $CredentialPath = Join-Path $WebDir ".credentials"
@@ -102,7 +107,7 @@ Write-Step "downloading web control plane into $InstallDir"
 foreach ($relative in $Files) {
     $target = Join-Path $InstallDir ($relative -replace "/", "\")
     New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
-    Invoke-WebRequest "$Raw/$relative" -UseBasicParsing -OutFile $target
+    Invoke-WebRequest "$Raw/$relative" -Headers $DownloadHeaders -UseBasicParsing -OutFile $target
 }
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
