@@ -8,5 +8,18 @@ KEY=CHANGE_ME_SHARED_SECRET
 # Used only by the browser login. Do not reuse the phone KEY.
 WEB_TOKEN=CHANGE_ME_WEB_TOKEN
 
+# Optional HighSpecs balance integration. Keep this key server-side.
+HIGHSPEC_API_BASE=https://api.highspec.gg/api/v1
+HIGHSPEC_API_KEY=
+HIGHSPEC_BALANCE_TTL=60
+
+# Optional ZeroPoint Face Unlock balance integration. Keep this key server-side.
+ZEROUNLOCK_API_BASE=https://zeropoint.to/api/faceunlock-api
+ZEROUNLOCK_API_KEY=
+ZEROUNLOCK_BALANCE_TTL=60
+
 PHONES=A,B
 GRACE=60
+
+# Optional: mark an external rejoin listener sample stale after this many seconds.
+REJOIN_STATS_GRACE=120

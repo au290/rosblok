@@ -8,14 +8,15 @@ dependency and exposes a browser dashboard instead.
 Run from this directory:
     python server.py
 
-Phone agents and direct Adopt Me monitors use the same poll path and X-Key
-authentication. The agent still supplies hopper/control data; a monitor can
-send inventory independently.
+Phone agents and direct Adopt Me monitors use authenticated poll endpoints.
+The agent supplies hopper/control data, while inventory is accepted only from
+monitor_adoptme.lua reports.
 """
 
 from __future__ import annotations
 
 import asyncio
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import hmac
 import json
@@ -25,6 +26,8 @@ import shlex
 import time
 import uuid
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from urllib.parse import urlparse
 
 from aiohttp import web
@@ -42,11 +45,21 @@ KEY = "CHANGE_ME_SHARED_SECRET"
 WEB_TOKEN = "CHANGE_ME_WEB_TOKEN"
 PHONES = ["A", "B"]
 GRACE = 60
+HIGHSPEC_API_BASE = "https://api.highspec.gg/api/v1"
+HIGHSPEC_API_KEY = ""
+HIGHSPEC_BALANCE_TTL = 60
+# HighSpecs points are satang: points / 100 = THB. Convert THB to USD using
+# the requested fixed rate so dashboard balances share one currency.
+HIGHSPEC_THB_PER_USD = 32
+ZEROUNLOCK_API_BASE = "https://zeropoint.to/api/faceunlock-api"
+ZEROUNLOCK_API_KEY = ""
+ZEROUNLOCK_BALANCE_TTL = 60
+REJOIN_STATS_GRACE = 120
 
 
 def load_config() -> None:
     """Load web/config.txt and optional web/web_token.txt if present."""
-    global HOST, PORT, KEY, WEB_TOKEN, PHONES, GRACE
+    global HOST, PORT, KEY, WEB_TOKEN, PHONES, GRACE, HIGHSPEC_API_BASE, HIGHSPEC_API_KEY, HIGHSPEC_BALANCE_TTL, ZEROUNLOCK_API_BASE, ZEROUNLOCK_API_KEY, ZEROUNLOCK_BALANCE_TTL, REJOIN_STATS_GRACE
 
     cfg = BASE_DIR / "config.txt"
     if cfg.exists():
@@ -68,6 +81,20 @@ def load_config() -> None:
                 # Keep the dashboard from flickering offline during a short
                 # mobile/VPS network stall.
                 GRACE = max(60, int(value))
+            elif name == "HIGHSPEC_API_BASE" and value:
+                HIGHSPEC_API_BASE = value.rstrip("/")
+            elif name == "HIGHSPEC_API_KEY":
+                HIGHSPEC_API_KEY = value
+            elif name == "HIGHSPEC_BALANCE_TTL" and value:
+                HIGHSPEC_BALANCE_TTL = max(15, int(value))
+            elif name == "ZEROUNLOCK_API_BASE" and value:
+                ZEROUNLOCK_API_BASE = value.rstrip("/")
+            elif name == "ZEROUNLOCK_API_KEY":
+                ZEROUNLOCK_API_KEY = value
+            elif name == "ZEROUNLOCK_BALANCE_TTL" and value:
+                ZEROUNLOCK_BALANCE_TTL = max(15, int(value))
+            elif name == "REJOIN_STATS_GRACE" and value:
+                REJOIN_STATS_GRACE = max(30, int(value))
 
     # config.txt is the installer's source of truth. Keep the legacy token file
     # as a fallback for older installs that still use it with a placeholder config.
@@ -79,21 +106,52 @@ def load_config() -> None:
 
 load_config()
 
-# Inventory reports can come from several Adopt Me monitors on one phone.
-# Keep an account for a little longer than the phone heartbeat so a transient
-# executor/game reload does not immediately remove it from the dashboard.
+# Inventory reports can come from several Adopt Me monitors, independently of
+# the phone-agent fleet. Keep an account for a little longer than the monitor
+# heartbeat so a transient executor/game reload does not immediately remove it.
 INVENTORY_GRACE = max(90, GRACE * 5)
+monitor_inventory: dict[str, dict] = {}
+monitor_inventory_seen: dict[str, float] = {}
+rejoin_stats = {
+    "online_accounts": 0,
+    "total_accounts": 0,
+    "mode": "",
+    "received_at": 0.0,
+}
+rejoin_history: list[dict] = []
+_highspec_balance_cache = {
+    "configured": False,
+    "available": False,
+    "loading": False,
+    "points": None,
+    "usd": None,
+    "updated_at": None,
+    "error": "",
+    "fetched_monotonic": 0.0,
+}
+_highspec_balance_task: asyncio.Task | None = None
+_zerounlock_balance_cache = {
+    "configured": False,
+    "available": False,
+    "loading": False,
+    "balance": None,
+    "pending": None,
+    "reserved": None,
+    "effective": None,
+    "updated_at": None,
+    "error": "",
+    "fetched_monotonic": 0.0,
+}
+_zerounlock_balance_task: asyncio.Task | None = None
 
-# Per-phone state accepts the existing agent.py report payload plus direct
-# account-level inventory reports from monitor_adoptme.lua.
+# Per-phone state is reserved for agent.py hopper/control reports. Monitor
+# inventory lives in the universal store above and never requires a phone ID.
 jobs: dict[str, list[dict]] = {phone: [] for phone in PHONES}
 futures: dict[str, asyncio.Future] = {}
 reports: dict[str, dict] = {
     phone: {
         "board": "",
         "footer": "",
-        "inv": {},
-        "inv_seen": {},
         "servers": 0,
         "srv_now": [],
         "packages": {},
@@ -232,6 +290,246 @@ def _normalise_trade_report(value: object) -> dict | None:
     return result
 
 
+def _fetch_highspec_balance() -> int:
+    """Fetch the private HighSpecs balance without exposing its API key."""
+    if not HIGHSPEC_API_KEY:
+        raise RuntimeError("HighSpecs API key is not configured")
+    request = urllib_request.Request(
+        f"{HIGHSPEC_API_BASE.rstrip('/')}/external/balance",
+        headers={
+            "X-API-Key": HIGHSPEC_API_KEY,
+            "Accept": "application/json",
+            # HighSpecs is protected by Cloudflare and rejects Python's
+            # default urllib signature as a blocked browser signature.
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PanenDashboard/1.0",
+        },
+    )
+    with urllib_request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    data = payload.get("data") if isinstance(payload, dict) else None
+    points = data.get("points") if isinstance(data, dict) else None
+    if isinstance(points, bool):
+        raise ValueError("HighSpecs returned an invalid balance")
+    try:
+        numeric = float(points)
+    except (TypeError, ValueError):
+        raise ValueError("HighSpecs returned an invalid balance") from None
+    if not math.isfinite(numeric) or numeric < 0:
+        raise ValueError("HighSpecs returned an invalid balance")
+    return int(numeric)
+
+
+async def _refresh_highspec_balance() -> None:
+    global _highspec_balance_task
+    try:
+        points = await asyncio.to_thread(_fetch_highspec_balance)
+    except (OSError, ValueError, urllib_error.URLError, json.JSONDecodeError, RuntimeError):
+        _highspec_balance_cache.update({
+            "configured": bool(HIGHSPEC_API_KEY),
+            "available": False,
+            "loading": False,
+            "points": None,
+            "usd": None,
+            "updated_at": time.time(),
+            "error": "Balance unavailable",
+            "fetched_monotonic": time.monotonic(),
+        })
+    else:
+        _highspec_balance_cache.update({
+            "configured": True,
+            "available": True,
+            "loading": False,
+            "points": points,
+            "usd": float(
+                (Decimal(points) / Decimal(100 * HIGHSPEC_THB_PER_USD)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            ),
+            "updated_at": time.time(),
+            "error": "",
+            "fetched_monotonic": time.monotonic(),
+        })
+    finally:
+        _highspec_balance_task = None
+
+
+def _highspec_balance_snapshot() -> dict:
+    """Return cached balance and refresh it in the background when stale."""
+    global _highspec_balance_task
+    configured = bool(HIGHSPEC_API_KEY)
+    if not configured:
+        return {
+            "configured": False,
+            "available": False,
+            "loading": False,
+            "points": None,
+            "usd": None,
+            "updated_at": None,
+            "error": "API key not configured",
+        }
+    stale = time.monotonic() - float(_highspec_balance_cache.get("fetched_monotonic", 0)) >= HIGHSPEC_BALANCE_TTL
+    if stale and (_highspec_balance_task is None or _highspec_balance_task.done()):
+        _highspec_balance_task = asyncio.create_task(_refresh_highspec_balance())
+    snapshot = {key: value for key, value in _highspec_balance_cache.items() if key != "fetched_monotonic"}
+    snapshot["configured"] = True
+    snapshot["loading"] = _highspec_balance_task is not None and not _highspec_balance_task.done()
+    return snapshot
+
+
+def _fetch_zerounlock_balance() -> dict[str, float]:
+    """Fetch the ZeroPoint Face Unlock balance without exposing its API key."""
+    if not ZEROUNLOCK_API_KEY:
+        raise RuntimeError("ZeroPoint API key is not configured")
+    request = urllib_request.Request(
+        f"{ZEROUNLOCK_API_BASE.rstrip('/')}/balance",
+        headers={
+            "X-API-Key": ZEROUNLOCK_API_KEY,
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) PanenDashboard/1.0",
+        },
+    )
+    with urllib_request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("ZeroPoint returned an invalid balance")
+
+    values: dict[str, float] = {}
+    for name in ("balance", "pending", "reserved", "effective"):
+        raw = payload.get(name)
+        if raw is None and name in ("pending", "reserved"):
+            raw = 0
+        if isinstance(raw, bool):
+            raise ValueError("ZeroPoint returned an invalid balance")
+        try:
+            numeric = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError("ZeroPoint returned an invalid balance") from None
+        if not math.isfinite(numeric) or numeric < 0:
+            raise ValueError("ZeroPoint returned an invalid balance")
+        values[name] = round(numeric, 2)
+    return values
+
+
+async def _refresh_zerounlock_balance() -> None:
+    global _zerounlock_balance_task
+    try:
+        values = await asyncio.to_thread(_fetch_zerounlock_balance)
+    except (OSError, ValueError, urllib_error.URLError, json.JSONDecodeError, RuntimeError):
+        _zerounlock_balance_cache.update({
+            "configured": bool(ZEROUNLOCK_API_KEY),
+            "available": False,
+            "loading": False,
+            "balance": None,
+            "pending": None,
+            "reserved": None,
+            "effective": None,
+            "updated_at": time.time(),
+            "error": "Balance unavailable",
+            "fetched_monotonic": time.monotonic(),
+        })
+    else:
+        _zerounlock_balance_cache.update({
+            "configured": True,
+            "available": True,
+            "loading": False,
+            **values,
+            "updated_at": time.time(),
+            "error": "",
+            "fetched_monotonic": time.monotonic(),
+        })
+    finally:
+        _zerounlock_balance_task = None
+
+
+def _zerounlock_balance_snapshot() -> dict:
+    """Return cached ZeroPoint balance and refresh it in the background when stale."""
+    global _zerounlock_balance_task
+    configured = bool(ZEROUNLOCK_API_KEY)
+    if not configured:
+        return {
+            "configured": False,
+            "available": False,
+            "loading": False,
+            "balance": None,
+            "pending": None,
+            "reserved": None,
+            "effective": None,
+            "updated_at": None,
+            "error": "API key not configured",
+        }
+    stale = time.monotonic() - float(_zerounlock_balance_cache.get("fetched_monotonic", 0)) >= ZEROUNLOCK_BALANCE_TTL
+    if stale and (_zerounlock_balance_task is None or _zerounlock_balance_task.done()):
+        _zerounlock_balance_task = asyncio.create_task(_refresh_zerounlock_balance())
+    snapshot = {key: value for key, value in _zerounlock_balance_cache.items() if key != "fetched_monotonic"}
+    snapshot["configured"] = True
+    snapshot["loading"] = _zerounlock_balance_task is not None and not _zerounlock_balance_task.done()
+    return snapshot
+
+
+def _merge_monitor_inventory(incoming: object) -> None:
+    """Merge one monitor payload into the phone-independent inventory store."""
+    now = time.time()
+    if isinstance(incoming, dict):
+        for account, data in incoming.items():
+            if not isinstance(data, dict):
+                continue
+            account = str(account)
+            monitor_inventory[account] = data
+            monitor_inventory_seen[account] = now
+    for account, last_seen in list(monitor_inventory_seen.items()):
+        if now - float(last_seen) > INVENTORY_GRACE:
+            monitor_inventory_seen.pop(account, None)
+            monitor_inventory.pop(account, None)
+
+
+def _rejoin_snapshot() -> dict:
+    """Return the latest listener ratio without exposing account identities."""
+    received_at = float(rejoin_stats.get("received_at", 0.0) or 0.0)
+    age = max(0, int(time.time() - received_at)) if received_at else None
+    fresh = bool(received_at and age is not None and age <= REJOIN_STATS_GRACE)
+    return {
+        "available": fresh,
+        "online_accounts": int(rejoin_stats.get("online_accounts", 0) or 0),
+        "total_accounts": int(rejoin_stats.get("total_accounts", 0) or 0),
+        "mode": str(rejoin_stats.get("mode", "")),
+        "age": age,
+        "received_at": received_at or None,
+        "history": list(rejoin_history[-240:]),
+    }
+
+
+def _merge_rejoin_stats(body: dict) -> None:
+    """Validate and store only aggregate online/total account counts."""
+    online_value = body.get("online_accounts")
+    total_value = body.get("total_accounts")
+    if isinstance(online_value, bool) or isinstance(total_value, bool):
+        raise ValueError("online_accounts and total_accounts must be integers")
+    try:
+        online_accounts = int(online_value)
+        total_accounts = int(total_value)
+    except (TypeError, ValueError):
+        raise ValueError("online_accounts and total_accounts must be integers") from None
+    if online_accounts < 0 or total_accounts < 0:
+        raise ValueError("account counts cannot be negative")
+    if online_accounts > total_accounts:
+        raise ValueError("online_accounts cannot exceed total_accounts")
+    mode = str(body.get("mode", "")).strip().lower()[:30]
+    received_at = time.time()
+    rejoin_stats.update(
+        online_accounts=online_accounts,
+        total_accounts=total_accounts,
+        mode=mode,
+        received_at=received_at,
+    )
+    rejoin_history.append({
+        "ts": received_at,
+        "online_accounts": online_accounts,
+        "total_accounts": total_accounts,
+    })
+    if len(rejoin_history) > 720:
+        del rejoin_history[:-720]
+
+
 def _merge_report(phone: str, body: dict) -> None:
     report = reports[phone]
     now = time.time()
@@ -261,20 +559,11 @@ def _merge_report(phone: str, body: dict) -> None:
             if re.fullmatch(r"\d+", str(number))
             and (trade := _normalise_trade_report(value)) is not None
         }
-    incoming = body.get("inv")
-    if isinstance(incoming, dict):
-        seen = report.setdefault("inv_seen", {})
-        inventory = report.setdefault("inv", {})
-        for account, data in incoming.items():
-            if not isinstance(data, dict):
-                continue
-            account = str(account)
-            inventory[account] = data
-            seen[account] = now
-        for account, last_seen in list(seen.items()):
-            if now - float(last_seen) > INVENTORY_GRACE:
-                seen.pop(account, None)
-                inventory.pop(account, None)
+    # Inventory is intentionally trusted only from the direct Adopt Me
+    # monitor. The agent may still send hopper/control data on this endpoint,
+    # but its legacy inv payload must never populate Pet Register.
+    if body.get("source") == "monitor_adoptme":
+        _merge_monitor_inventory(body.get("inv"))
     if body.get("prices"):
         report["prices"] = body["prices"]
     if body.get("rarities"):
@@ -289,7 +578,7 @@ def _merge_report(phone: str, body: dict) -> None:
 
 
 async def handle_poll(request: web.Request) -> web.Response:
-    """Receive reports from agent.py or a direct Adopt Me monitor."""
+    """Receive agent reports (and legacy phone-scoped monitor reports)."""
     if request.headers.get("X-Key") != KEY:
         return web.json_response({"error": "bad key"}, status=403)
     phone = request.match_info["phone"]
@@ -304,6 +593,37 @@ async def handle_poll(request: web.Request) -> web.Response:
     pending = jobs[phone]
     jobs[phone] = []
     return web.json_response({"jobs": pending})
+
+
+async def handle_monitor_poll(request: web.Request) -> web.Response:
+    """Receive phone-independent inventory from monitor_adoptme.lua."""
+    if request.headers.get("X-Key") != KEY:
+        return web.json_response({"error": "bad key"}, status=403)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    if not isinstance(body, dict) or body.get("source") != "monitor_adoptme":
+        return web.json_response({"error": "monitor source required"}, status=400)
+    _merge_monitor_inventory(body.get("inv"))
+    return web.json_response({"jobs": []})
+
+
+async def handle_rejoin_stats(request: web.Request) -> web.Response:
+    """Receive aggregate online/total account counts from rejoin_listener.py."""
+    if request.headers.get("X-Key") != KEY:
+        return web.json_response({"error": "bad key"}, status=403)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        return web.json_response({"error": "invalid JSON"}, status=400)
+    if not isinstance(body, dict) or body.get("source") != "rejoin_listener":
+        return web.json_response({"error": "listener source required"}, status=400)
+    try:
+        _merge_rejoin_stats(body)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    return web.json_response({"ok": True})
 
 
 def _session_valid(request: web.Request) -> bool:
@@ -371,7 +691,7 @@ def _report_view(phone: str) -> dict:
         "last_seen_seconds": age,
         "board": report.get("board", ""),
         "footer": report.get("footer", ""),
-        "inv": report.get("inv", {}),
+        "inv": {},
         "servers": report.get("servers", 0),
         "srv_now": report.get("srv_now", []),
         "packages": report.get("packages", {}),
@@ -382,17 +702,14 @@ def _report_view(phone: str) -> dict:
     }
 
 
-def _inventory_rows(phone: str) -> list[dict]:
+def _inventory_rows(_phone: str) -> list[dict]:
     rows: list[dict] = []
     now = time.time()
-    for target in targets(phone):
-        report = reports[target]
-        seen = report.get("inv_seen") or {}
-        for account, data in (report.get("inv") or {}).items():
-            if now - float(seen.get(account, 0)) > INVENTORY_GRACE:
-                continue
-            if isinstance(data, dict) and data.get("player") and data.get("player") != "?":
-                rows.append(data)
+    for account, data in monitor_inventory.items():
+        if now - float(monitor_inventory_seen.get(account, 0)) > INVENTORY_GRACE:
+            continue
+        if isinstance(data, dict) and data.get("player") and data.get("player") != "?":
+            rows.append(data)
     return rows
 
 
@@ -577,6 +894,9 @@ def _status_payload(phone: str) -> dict:
     summaries = {target: _inventory_summary(target) for target in selected}
     combined = _inventory_summary(phone)
     combined["value"] = _value_summary(phone)
+    combined["highspec_balance"] = _highspec_balance_snapshot()
+    combined["zerounlock_balance"] = _zerounlock_balance_snapshot()
+    combined["rejoin"] = _rejoin_snapshot()
     pets = []
     rarities = _all_rarities(phone)
     prices = _all_prices(phone)
@@ -778,6 +1098,8 @@ def create_app(_argv=None) -> web.Application:
     app.router.add_post("/api/logout", handle_logout)
     app.router.add_get("/api/status", handle_status)
     app.router.add_post("/api/command", handle_command)
+    app.router.add_post("/api/monitor/poll", handle_monitor_poll)
+    app.router.add_post("/api/rejoin/stats", handle_rejoin_stats)
     app.router.add_post("/api/{phone}/poll", handle_poll)
     return app
 
@@ -788,5 +1110,6 @@ if __name__ == "__main__":
     if WEB_TOKEN.startswith("CHANGE_ME"):
         raise SystemExit("Set WEB_TOKEN in web/config.txt or web/web_token.txt before starting the web server.")
     print(f"[web] dashboard: http://127.0.0.1:{PORT}/")
-    print(f"[web] phone poll endpoint: /api/{{phone}}/poll")
+    print(f"[web] agent poll endpoint: /api/{{phone}}/poll")
+    print("[web] monitor poll endpoint: /api/monitor/poll")
     web.run_app(create_app(), host=HOST, port=PORT)

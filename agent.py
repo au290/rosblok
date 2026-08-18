@@ -1339,7 +1339,7 @@ def poll(results: list) -> list:
     # prefs.xml is tied directly to the package assigned to this hopper, so it
     # is more reliable than a shared-workspace heartbeat filename.
     accounts.update(package_account_snapshot())
-    body = json.dumps({"board": board, "footer": footer, "inv": read_inv(),
+    body = json.dumps({"board": board, "footer": footer,
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
                        "trades": trades, "accounts": accounts,

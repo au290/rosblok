@@ -259,6 +259,7 @@ class SimulatedPhone:
         return {
             "board": board,
             "footer": footer,
+            "source": "monitor_adoptme",
             "inv": self.inventory(),
             "servers": sum(len(hopper.rotation["links"]) for hopper in self.hoppers.values()),
             "srv_now": current,

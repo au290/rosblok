@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Hopper Fleet Web Control</title>
   <link rel="icon" type="image/png" href="/assets/logo.png?v=3">
-  <link rel="stylesheet" href="/assets/styles.css?v=3">
+  <link rel="stylesheet" href="/assets/styles.css?v=12">
 </head>
 <body>
   <section id="boot-view" class="boot-view" role="status" aria-label="Loading dashboard">
@@ -64,17 +64,24 @@
             <div class="summary-intro"><div><p class="eyebrow">TODAY</p><h2>Executive summary</h2></div><p class="muted">Totals combine every reported account.</p></div>
             <section class="summary-grid" aria-label="Executive metrics">
               <div class="metric metric-highlight"><span>Income estimate</span><strong id="metric-income">-</strong><small>priced inventory</small></div>
-              <div class="metric"><span>Total hoppers</span><strong id="metric-hoppers">-</strong><small>across the fleet</small></div>
-              <div class="metric"><span>Total pets</span><strong id="metric-pets">-</strong><small>reported in inventory</small></div>
+              <div class="metric"><span>Online hoppers</span><strong id="metric-hoppers">-</strong><small>active across the fleet</small></div>
+              <div class="metric"><span>Rejoin accounts</span><strong id="metric-rejoin-online">-</strong><small id="metric-rejoin-note">Listener not connected</small></div>
               <div class="metric"><span>Online phones</span><strong id="metric-online">-</strong><small>active connections</small></div>
             </section>
+            <section class="balance-section" aria-labelledby="balance-heading">
+              <div class="section-heading compact-heading"><div><p class="eyebrow">ACCOUNT BALANCES</p><h3 id="balance-heading">Service balances</h3></div><span class="chart-note">USD</span></div>
+              <div class="balance-grid">
+                <div class="metric balance-card"><span>HighSpecs</span><strong id="metric-highspec-balance">-</strong><small id="metric-highspec-balance-note">API key not configured</small></div>
+                <div class="metric balance-card"><span>ZeroPoint Face Unlock</span><strong id="metric-zeropoint-balance">-</strong><small id="metric-zeropoint-balance-note">API key not configured</small></div>
+              </div>
+            </section>
             <div class="summary-layout">
-              <section class="visual-card income-card"><div class="section-heading compact-heading"><div><p class="eyebrow">VALUE GRAPH</p><h3>Inventory income mix</h3></div><span class="chart-note">Top priced pets</span></div><div id="income-bars" class="bar-chart"><p class="empty">Waiting for priced inventory</p></div></section>
-              <section class="visual-card mix-card"><div class="section-heading compact-heading"><div><p class="eyebrow">FLEET MIX</p><h3>Pet volume</h3></div><span id="pet-mix-total" class="chart-note">- pets</span></div><div id="pet-mix-chart" class="mix-chart"><p class="empty">Waiting for inventory</p></div></section>
+              <section class="visual-card rejoin-history-card"><div class="section-heading compact-heading"><div><p class="eyebrow">REJOIN ACTIVITY</p><h3>Accounts in place</h3></div><span id="rejoin-history-note" class="chart-note">Waiting for snapshots</span></div><div id="rejoin-history-chart" class="line-chart"><p class="empty">Waiting for rejoin snapshots</p></div></section>
+              <section class="visual-card income-card"><div class="section-heading compact-heading"><div><p class="eyebrow">VALUE GRAPH</p><h3>Inventory income mix</h3></div><span class="chart-note">Top priced pets</span></div><div class="chart-summary"><strong id="income-total">-</strong><span id="income-total-note">Waiting for priced inventory</span></div><div id="income-bars" class="bar-chart"><p class="empty">Waiting for priced inventory</p></div></section>
             </div>
             <div class="summary-lower-grid">
               <section><div class="section-heading"><div><p class="eyebrow">FLEET HEALTH</p><h3>Phone status</h3></div></div><div id="phone-cards" class="phone-grid"></div></section>
-              <section class="detail-section inventory-summary"><div class="section-heading compact-heading"><div><p class="eyebrow">ACCOUNTS</p><h3>Inventory pulse</h3></div><span class="chart-note">Live report</span></div><div class="table-wrap"><table><thead><tr><th>Account</th><th>Bucks</th><th>Pets</th><th>Eggs</th></tr></thead><tbody id="inventory-body"><tr><td colspan="4" class="empty">No inventory report yet</td></tr></tbody></table></div></section>
+              <section class="detail-section inventory-summary"><div class="section-heading compact-heading"><div><p class="eyebrow">ACCOUNTS</p><h3>Inventory pulse</h3></div><span id="inventory-count-note" class="chart-note">0 accounts</span></div><div class="table-wrap"><table><thead><tr><th>Account</th><th>Bucks</th><th>Pets</th><th>Eggs</th></tr></thead><tbody id="inventory-body"><tr><td colspan="4" class="empty">No inventory report yet</td></tr></tbody></table></div></section>
             </div>
           </section>
 
@@ -114,8 +121,8 @@
           <section class="page-view" data-page-view="pets" hidden>
             <div class="page-head"><div><p class="eyebrow">INVENTORY</p><h2>Pet trackstat</h2><p class="muted">Count, growth, rarity, and estimated value for every reported pet type.</p></div><div class="page-head-stat"><strong id="pet-total-stat">0 pets</strong><span id="pet-types-stat">0 types</span></div></div>
             <div class="track-summary"><div class="metric"><span>Pet types</span><strong id="pet-types-card">-</strong><small>unique variants</small></div><div class="metric"><span>Full grown</span><strong id="pet-full-grown">-</strong><small>reported mature</small></div><div class="metric"><span>Priced types</span><strong id="pet-priced-types">-</strong><small>with market data</small></div><div class="metric"><span>Rarest tier</span><strong id="pet-rare-tier">-</strong><small>highest observed</small></div></div>
-            <div class="track-layout"><section class="visual-card"><div class="section-heading compact-heading"><div><p class="eyebrow">DISTRIBUTION</p><h3>Largest collections</h3></div></div><div id="pet-distribution-bars" class="bar-chart"><p class="empty">Waiting for inventory</p></div></section><section class="visual-card track-guide"><p class="eyebrow">TRACKING</p><h3>What is being counted</h3><p class="muted">Totals combine every reported account. Variant rows stay separate so neon and mega neon progress is visible.</p><div class="legend-row"><span class="legend-dot legendary"></span>Legendary<span class="legend-dot ultra"></span>Ultra-rare<span class="legend-dot rare"></span>Rare</div></section></div>
-            <section class="detail-section pet-table-section"><div class="section-heading compact-heading"><div><p class="eyebrow">PET REGISTER</p><h3>All tracked pets</h3></div><span class="chart-note">Sorted by count</span></div><div class="table-wrap"><table class="pet-track-table"><thead><tr><th>Pet</th><th>Rarity</th><th>Count</th><th>Full grown</th><th>Progress</th><th>Est. value</th></tr></thead><tbody id="pet-track-body"><tr><td colspan="6" class="empty">No pets reported yet</td></tr></tbody></table></div></section>
+            <div class="track-layout"><section class="visual-card"><div class="section-heading compact-heading"><div><p class="eyebrow">DISTRIBUTION</p><h3>Largest collections</h3></div></div><div id="pet-distribution-bars" class="bar-chart"><p class="empty">Waiting for inventory</p></div></section><section class="visual-card track-guide"><p class="eyebrow">TRACKING</p><h3>What is being counted</h3><p class="muted">Totals combine every reported account. Variant rows stay separate for clear inventory and count tracking.</p><div class="legend-row"><span class="legend-dot legendary"></span>Legendary<span class="legend-dot ultra"></span>Ultra-rare<span class="legend-dot rare"></span>Rare</div></section></div>
+            <section class="detail-section pet-table-section"><div class="section-heading compact-heading"><div><p class="eyebrow">PET REGISTER</p><h3>All tracked pets</h3></div><span id="pet-sort-note" class="chart-note">Sorted by count</span></div><div class="table-wrap"><table class="pet-track-table"><thead><tr><th scope="col" data-pet-sort-header="name"><button class="table-sort" type="button" data-pet-sort="name">Pet<span class="sort-indicator" aria-hidden="true"></span></button></th><th scope="col" data-pet-sort-header="rarity"><button class="table-sort" type="button" data-pet-sort="rarity">Rarity<span class="sort-indicator" aria-hidden="true"></span></button></th><th scope="col" data-pet-sort-header="count"><button class="table-sort" type="button" data-pet-sort="count">Count<span class="sort-indicator" aria-hidden="true"></span></button></th><th scope="col" data-pet-sort-header="full_grown"><button class="table-sort" type="button" data-pet-sort="full_grown">Full grown<span class="sort-indicator" aria-hidden="true"></span></button></th><th scope="col" data-pet-sort-header="value"><button class="table-sort" type="button" data-pet-sort="value">Est. value<span class="sort-indicator" aria-hidden="true"></span></button></th></tr></thead><tbody id="pet-track-body"><tr><td colspan="5" class="empty">No pets reported yet</td></tr></tbody></table></div></section>
           </section>
         </main>
       </div>
@@ -145,6 +152,6 @@
     </dialog>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
   </section>
-  <script src="/assets/app.js?v=3"></script>
+  <script src="/assets/app.js?v=18"></script>
 </body>
 </html>

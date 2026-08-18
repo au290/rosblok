@@ -1,0 +1,26 @@
+# Copy this file to rejoin_listener.txt. Do not commit that real config file.
+# The listener must run where it can reach the source dashboard and account DB.
+
+SOURCE_URL=https://agent.wintercode.dev
+SOURCE_SCRIPT_KEY=
+SOURCE_PASSWORD=
+SOURCE_CREDENTIALS_FILE=../resource/nega.py
+
+# Preferred: local user:password:cookie database. Only the first username field
+# is counted and usernames are never sent to the Hopper Fleet web server.
+ACCOUNT_DB=C:\path\to\accountdb.txt
+
+# Use this only when ACCOUNT_DB is intentionally blank.
+TOTAL_ACCOUNTS=observed
+
+TARGET_URL=https://agent.kqing.web.id
+# Must match KEY in this project's web/config.txt, not WEB_TOKEN.
+TARGET_KEY=
+TARGET_KEY_FILE=config.txt
+
+POLL_INTERVAL=30
+# reported = every username supplied by the source API
+# connected = username on an agent with a live connection
+# running = connected agent and Roblox package process running
+# ingame = connected running package with game_state=ingame
+ONLINE_MODE=ingame

@@ -213,20 +213,77 @@ executor's autoexec, then set these values near the top of the script:
 ```lua
 local VPS_URL = "https://your-domain.example" -- or http://<server>:8090 on a trusted LAN
 local KEY = "the-same-value-as-web-config"
-local PHONE = "A"
 ```
 
-Use one monitor per Roblox account. Monitors using the same `PHONE` are merged
-by account name, and accounts that stop reporting are removed after the
-inventory grace period. The monitor only reports inventory; hopper lifecycle
-commands, board/health data, and the current StarPets price worker still come
-from `agent.py`. Run the agent when those features are needed. If you only need
-the inventory pages, the monitor can report without an agent.
+Use one monitor per Roblox account. Reports are merged by account name and are
+independent of the phone-agent fleet, so no phone ID is required. Accounts that
+stop reporting are removed after the inventory grace period. The monitor only
+reports inventory; hopper lifecycle commands, board/health data, and the
+current StarPets price worker still come from `agent.py`. Run the agent when
+those features are needed. If you only need the inventory pages, the monitor
+can report without an agent.
 
-The direct monitor endpoint is the same authenticated poll endpoint:
+To show the HighSpecs balance on Executive Summary, add the API key to the
+server's `web/config.txt` (never to frontend code):
 
 ```text
-POST /api/{phone}/poll
+HIGHSPEC_API_KEY=hsk_your_key_here
+```
+
+The server calls `GET https://api.highspec.gg/api/v1/external/balance`, caches
+the result for `HIGHSPEC_BALANCE_TTL` seconds, and displays USD. HighSpecs
+points are converted from satang to THB, then divided by 32 THB per USD.
+The raw points remain in the card note. Leave the key empty to disable it.
+
+To show the ZeroPoint Face Unlock balance on Executive Summary, add this to
+the same server-side config:
+
+```text
+ZEROUNLOCK_API_BASE=https://zeropoint.to/api/faceunlock-api
+ZEROUNLOCK_API_KEY=ZP_FaceUnlock_your_key_here
+ZEROUNLOCK_BALANCE_TTL=60
+```
+
+The server calls `GET /balance` with `X-API-Key` and displays the effective
+spendable balance in USD, with total and reserved amounts in the card note.
+The key is never sent to the browser.
+
+## Rejoin account comparison
+
+`rejoin_listener.py` is an optional, separate listener for a WinterHub/Rejoin
+dashboard. It logs in to the source dashboard, counts usernames reported by its
+`/api/agents` endpoint, and sends only an aggregate `online/total` value to this
+dashboard. Account rows, passwords, and cookies stay on the listener machine.
+
+Set it up once:
+
+```powershell
+Copy-Item rejoin_listener.example.txt rejoin_listener.txt
+python -m pip install -r requirements.txt
+python rejoin_listener.py --once
+python rejoin_listener.py
+```
+
+Fill `SOURCE_SCRIPT_KEY`, `SOURCE_PASSWORD`, `ACCOUNT_DB` (or use
+`TOTAL_ACCOUNTS=observed`), and `TARGET_KEY` in `rejoin_listener.txt`.
+`SOURCE_CREDENTIALS_FILE` can point at a local credentials script such as
+`../resource/nega.py`; `TARGET_KEY_FILE=config.txt` can read the web `KEY`
+without copying it. `TARGET_KEY` is the web server `KEY`, not the browser
+`WEB_TOKEN`. The dashboard shows the result as `online / total` in the
+Executive Summary. A listener update older than `REJOIN_STATS_GRACE` seconds
+is shown as stale.
+
+`ONLINE_MODE` controls what “online” means: `ingame` (default) requires a
+connected agent, a running Roblox package, and `game_state=ingame`; `connected`
+counts usernames on connected agents, and `running` requires a running Roblox
+package. Use
+`reported` to match the simple username collection used by `resource/nega.py`.
+The summary line chart keeps the latest 240 listener snapshots in memory.
+
+The direct monitor endpoint is authenticated with the same shared key:
+
+```text
+POST /api/monitor/poll
 X-Key: <KEY>
 ```
 
@@ -238,6 +295,13 @@ The browser uses a session cookie after `POST /api/login`.
 GET  /healthz
 GET  /api/status?phone=all
 POST /api/command
+POST /api/rejoin/stats
+```
+
+The listener payload is aggregate-only:
+
+```json
+{"source":"rejoin_listener","online_accounts":243,"total_accounts":600,"mode":"connected"}
 ```
 
 Example command body:

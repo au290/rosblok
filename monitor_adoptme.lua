@@ -2,8 +2,8 @@
 -- Place in your executor autoexec. Every INTERVAL seconds it sends this
 -- account's inventory directly to the Hopper Fleet web server.
 --
--- Set VPS_URL, KEY, and PHONE before installing. The shared key is visible in
--- this client script by design; use HTTPS when the server is not local.
+-- Set VPS_URL and KEY before installing. The shared key is visible in this
+-- client script by design; use HTTPS when the server is not local.
 
 local RS          = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -14,7 +14,6 @@ task.wait(3)
 
 local VPS_URL  = "http://agent.kqing.web.id" -- no trailing slash
 local KEY      = "CHANGE_ME_SHARED_SECRET" -- must match web/config.txt
-local PHONE    = "A"                       -- phone id configured in web/config.txt
 local INTERVAL = 30
 local FG_AGE   = 5                         -- ages 0..5 (Newborn..Full Grown)
 local LP       = Players.LocalPlayer
@@ -26,7 +25,7 @@ local function request_function()
 end
 
 local function post_report(body)
-    local url = VPS_URL .. "/api/" .. PHONE .. "/poll"
+    local url = VPS_URL .. "/api/monitor/poll"
     local headers = {
         ["Content-Type"] = "application/json",
         ["X-Key"] = KEY,

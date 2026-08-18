@@ -108,22 +108,48 @@ h3 { margin-bottom: 0; font-size: 16px; font-weight: 650; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 13px; }
 .compact-heading { align-items: center; }
 .chart-note { font-size: 11px; white-space: nowrap; }
+.chart-summary { display: flex; align-items: baseline; gap: 10px; min-height: 42px; margin: 2px 0 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.chart-summary strong { color: var(--accent-strong); font-size: 27px; font-weight: 650; }
+.chart-summary span { color: var(--muted); font-size: 11px; }
 .bar-chart { display: grid; gap: 12px; min-height: 180px; align-content: center; }
+.line-chart { min-height: 210px; }
+.rejoin-svg { display: block; width: 100%; height: 210px; overflow: visible; }
+.rejoin-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 5; }
+.rejoin-area { fill: url(#rejoin-area-fill); }
+.rejoin-line { fill: none; stroke: var(--accent); stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
+.rejoin-point { fill: var(--accent-strong); stroke: var(--panel); stroke-width: 3; }
+.rejoin-axis-label { fill: var(--muted); font-size: 10px; }
+.rejoin-y-label { fill: var(--muted); font-size: 10px; }
 .bar-row { display: grid; grid-template-columns: minmax(115px, 170px) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
 .bar-label { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .bar-track { height: 9px; overflow: hidden; border-radius: 2px; background: #30383d; }
 .bar-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); }
 .bar-value { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.income-card .bar-chart { align-content: stretch; grid-auto-rows: minmax(0, 1fr); }
 .mix-chart { display: flex; align-items: end; gap: 10px; min-height: 180px; padding: 8px 5px 0; border-bottom: 1px solid var(--line); }
 .mix-column { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: end; gap: 7px; min-width: 35px; height: 170px; }
 .mix-column span { width: min(35px, 70%); min-height: 3px; border-radius: 3px 3px 0 0; background: var(--blue); }
 .mix-column label { overflow: hidden; width: 100%; margin: 0; color: var(--muted); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.summary-lower-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr); gap: 20px; }
+.summary-lower-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr); gap: 20px; align-items: stretch; }
+.summary-lower-grid > section { min-width: 0; }
 .phone-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .phone-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
 .phone-card.offline { border-color: #8a5865; }
-.phone-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 9px; }
-.phone-footer { min-height: 21px; margin: 0 0 9px; color: var(--muted); font-size: 11px; }
+.phone-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.phone-last-seen { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+.phone-health { display: flex; flex-wrap: wrap; gap: 5px; min-height: 22px; margin-bottom: 12px; }
+.phone-health span, .phone-chips span { padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; background: #202329; color: var(--muted); font-size: 10px; }
+.phone-kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-bottom: 12px; }
+.phone-kpis > div { padding: 9px 10px; border: 1px solid var(--line); border-radius: 5px; background: #14171a; }
+.phone-kpis strong, .phone-kpis span { display: block; }
+.phone-kpis strong { color: var(--text); font-size: 17px; }
+.phone-kpis span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.phone-card-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; color: var(--muted); font-size: 11px; }
+.phone-chips { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.phone-attention { margin: 12px 0 0; color: var(--accent-strong); font-size: 11px; }
+.phone-attention.has-issues { color: var(--warning); }
+.phone-raw { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 9px; }
+.phone-raw summary { color: var(--muted); cursor: pointer; font-size: 11px; }
 .phone-board { overflow: auto; min-height: 75px; max-height: 180px; margin: 0; padding: 10px; border: 1px solid #2b3034; background: #111315; color: #d8dde0; font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; }
 .status { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
 .status::before, .status-label::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); }
@@ -131,6 +157,9 @@ h3 { margin-bottom: 0; font-size: 16px; font-weight: 650; }
 .status.online::before { background: var(--accent); }
 .detail-section { min-width: 0; padding: 18px; }
 .table-wrap { overflow-x: auto; }
+.inventory-summary { align-self: stretch; display: flex; flex-direction: column; min-height: 100%; }
+.inventory-summary .table-wrap { flex: 1 1 auto; min-height: 0; max-height: 330px; overflow: auto; }
+.inventory-summary thead th { position: sticky; z-index: 1; top: 0; background: var(--panel); }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: 10px 8px; border-bottom: 1px solid #2a3034; text-align: left; }
 th { color: var(--muted); font-size: 10px; font-weight: 650; text-transform: uppercase; }
@@ -231,10 +260,16 @@ td:not(:first-child), th:not(:first-child) { text-align: right; }
 .pet-table-section { margin-top: 0; }
 .pet-track-table { min-width: 720px; }
 .pet-track-table th, .pet-track-table td { height: 53px; }
+.pet-track-table .table-sort { display: inline-flex; align-items: center; justify-content: flex-end; gap: 7px; width: 100%; min-height: 26px; padding: 3px 0; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 10px; font-weight: 650; text-transform: uppercase; }
+.pet-track-table th:first-child .table-sort { justify-content: flex-start; }
+.pet-track-table .table-sort:hover { border-color: transparent; background: transparent; color: var(--text); transform: none; }
+.pet-track-table .table-sort.is-active { color: var(--text); }
+.sort-indicator { display: inline-block; width: 7px; height: 7px; border: solid currentColor; border-width: 0 1px 1px 0; opacity: .45; transform: translateY(-2px) rotate(45deg); transition: opacity .16s ease, transform .16s ease; }
+.table-sort.is-active .sort-indicator { opacity: 1; }
+.table-sort.is-active .sort-indicator.asc { transform: translateY(2px) rotate(225deg); }
 .pet-name { display: block; color: var(--text); font-weight: 650; }.pet-variant { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
 .rarity-chip { display: inline-block; padding: 3px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--muted); font-size: 10px; text-transform: uppercase; }
 .rarity-chip.legendary { border-color: #9f727f; color: var(--warning); }.rarity-chip.ultra { border-color: #70577c; color: var(--violet); }.rarity-chip.rare { border-color: #765577; color: var(--blue); }
-.pet-progress { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }.pet-progress .progress-track { width: 72px; }.pet-progress small { color: var(--muted); font-size: 10px; }
 
 .sidebar-backdrop { display: none; }
 @media (max-width: 1100px) {
@@ -360,7 +395,6 @@ th { padding-top: 11px; padding-bottom: 11px; color: #c2b2bc; }
 th, td { border-bottom-color: #4c4753; }
 tbody tr { transition: background-color .14s ease; }
 tbody tr:hover { background: #37323c; }
-.inventory-summary { align-self: start; }
 .hopper-section { margin-bottom: 22px; }
 .hopper-toolbar { padding: 15px 18px; border-bottom-color: #4c4753; background: #26232b; }
 .hopper-table thead th { background: #26232b; }
@@ -378,7 +412,6 @@ tbody tr:hover { background: #37323c; }
 .track-guide { background: #332d39; }
 .pet-table-section { overflow: hidden; }
 .rarity-chip { border-radius: 999px; }
-.pet-progress .progress-track { height: 5px; }
 
 @media (max-width: 850px) {
   .topbar { position: relative; }
@@ -387,6 +420,9 @@ tbody tr:hover { background: #37323c; }
 
 /* Operational hierarchy: state is colourful, surfaces stay neutral. */
 .summary-grid { grid-template-columns: repeat(4, minmax(150px, 1fr)); }
+.balance-section { margin-bottom: 16px; }
+.balance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; }
+.balance-card { min-height: 96px; }
 .cell-secondary, .chart-note, .sidebar-status small, .phone-footer { font-size: 12px; }
 th { font-size: 11px; }
 .workspace-grid { display: block; }
@@ -421,6 +457,7 @@ th { font-size: 11px; }
 
 @media (max-width: 1100px) { .summary-grid { grid-template-columns: repeat(2, minmax(140px, 1fr)); } }
 @media (max-width: 700px) {
+  .balance-grid { grid-template-columns: 1fr; max-width: none; }
   .hopper-toolbar { align-items: stretch; flex-wrap: wrap; padding: 12px; }
   .hopper-toolbar input { flex: 1 1 100%; max-width: none; }
   .hopper-toolbar select { flex: 1 1 0; width: auto; }
@@ -596,4 +633,28 @@ tbody tr:hover, .hopper-table tbody tr:hover { background: #242424; }
   .app-view.sidebar-collapsed .nav-icon { width: auto; }
   .app-view.sidebar-collapsed .sidebar-status { justify-content: center; width: 44px; height: 44px; gap: 0; margin-right: auto; margin-left: auto; padding: 0; }
   .app-view.sidebar-collapsed .sidebar-logout { justify-content: center; width: 44px; gap: 0; margin-right: auto; margin-left: auto; padding: 0; }
+}
+
+/* Card surfaces respond as a group so the dashboard feels tangible without
+   shifting its layout or turning controls into oversized buttons. */
+.metric,
+.visual-card,
+.detail-section,
+.phone-card,
+.hopper-section,
+.login-panel {
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease, background-color .2s ease;
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .metric:hover,
+  .visual-card:hover,
+  .detail-section:hover,
+  .phone-card:hover,
+  .hopper-section:hover,
+  .login-panel:hover {
+    transform: translateY(-2px);
+    border-color: #676767;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, .24);
+  }
 }

@@ -1,4 +1,5 @@
 config.txt
+rejoin_listener.txt
 web_token.txt
 .credentials
 hoppers.json

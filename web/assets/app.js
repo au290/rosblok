@@ -22,6 +22,9 @@
   let currentHoppers = [];
   let rotationHopperId = null;
   let hopperStateFilter = "all";
+  let petSortKey = "count";
+  let petSortDirection = "desc";
+  let currentPets = [];
   let confirmationResolver = null;
   let toastTimer = null;
   const selectedHoppers = new Set();
@@ -122,6 +125,70 @@
   function integer(value) { return new Intl.NumberFormat().format(Number(value || 0)); }
   function statusClass(rarity) { const value = String(rarity || "").toLowerCase(); return ["legendary", "ultra", "rare", "uncommon"].find((item) => value.includes(item)) || ""; }
 
+  const petRarityRank = { unrated: 0, common: 1, uncommon: 2, rare: 3, ultra: 4, legendary: 5 };
+  const petSortLabels = { name: "pet", rarity: "rarity", count: "count", full_grown: "full grown", value: "estimated value" };
+
+  function petSortValue(pet, key) {
+    if (key === "name") return String(pet.name || "").toLowerCase();
+    if (key === "rarity") {
+      const rawRarity = String(pet.rarity || "").toLowerCase();
+      if (rawRarity.includes("legendary")) return petRarityRank.legendary;
+      if (rawRarity.includes("ultra")) return petRarityRank.ultra;
+      if (rawRarity.includes("rare")) return petRarityRank.rare;
+      if (rawRarity.includes("uncommon")) return petRarityRank.uncommon;
+      if (rawRarity.includes("common")) return petRarityRank.common;
+      return petRarityRank.unrated;
+    }
+    if (key === "count") return Number(pet.count || 0);
+    if (key === "full_grown") return Number(pet.full_grown || 0);
+    if (key === "value") {
+      const value = Number(pet.value_usd);
+      return pet.priced || value > 0 ? (Number.isFinite(value) ? value : 0) : null;
+    }
+    return 0;
+  }
+
+  function sortedPets(rows) {
+    const direction = petSortDirection === "asc" ? 1 : -1;
+    return [...rows].sort((left, right) => {
+      const a = petSortValue(left, petSortKey);
+      const b = petSortValue(right, petSortKey);
+      if (a === null && b !== null) return 1;
+      if (a !== null && b === null) return -1;
+      if (a !== b) {
+        if (typeof a === "string" && typeof b === "string") return direction * a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+        return direction * (a < b ? -1 : 1);
+      }
+      const nameCompare = String(left.name || "").localeCompare(String(right.name || ""), undefined, { numeric: true, sensitivity: "base" });
+      if (nameCompare) return nameCompare;
+      return String(left.variant || "").localeCompare(String(right.variant || ""), undefined, { sensitivity: "base" });
+    });
+  }
+
+  function updatePetSortIndicators() {
+    document.querySelectorAll("[data-pet-sort]").forEach((button) => {
+      const active = button.dataset.petSort === petSortKey;
+      const direction = active ? petSortDirection : "";
+      const header = button.closest("th");
+      const indicator = button.querySelector(".sort-indicator");
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-label", `Sort by ${petSortLabels[button.dataset.petSort] || button.dataset.petSort}${active ? `, ${direction === "asc" ? "ascending" : "descending"}` : ""}`);
+      if (header) header.setAttribute("aria-sort", active ? (direction === "asc" ? "ascending" : "descending") : "none");
+      if (indicator) indicator.className = `sort-indicator${direction ? ` ${direction}` : ""}`;
+    });
+    const note = $("pet-sort-note");
+    if (note) note.textContent = `Sorted by ${petSortLabels[petSortKey] || petSortKey} (${petSortDirection === "asc" ? "A-Z" : "high to low"})`;
+  }
+
+  function sortPets(key) {
+    if (key === petSortKey) petSortDirection = petSortDirection === "asc" ? "desc" : "asc";
+    else {
+      petSortKey = key;
+      petSortDirection = key === "name" ? "asc" : "desc";
+    }
+    renderPets(currentPets);
+  }
+
   function renderPhoneOptions(phones) {
     const currentCommand = $("command-phone").value || "all";
     const options = phones.map((phone) => `<option value="${escapeHtml(phone)}">Phone ${escapeHtml(phone)}</option>`).join("");
@@ -133,14 +200,59 @@
     hopperFilter.value = ["all", ...phones].includes(currentHopperFilter) ? currentHopperFilter : "all";
   }
 
-  function renderPhones(phones, targetId = "phone-cards") {
+  function phoneHopperSummary(hoppers) {
+    const rows = Array.isArray(hoppers) ? hoppers : [];
+    const running = rows.filter((hopper) => hopper.online !== false && ["running", "starting", "held"].includes(String(hopper.status || ""))).length;
+    const reporting = rows.filter((hopper) => {
+      const trade = hopper.trade || {};
+      return trade.status && trade.status !== "no script" && trade.fresh !== false;
+    }).length;
+    const attention = rows.filter((hopper) => {
+      const trade = hopper.trade || {};
+      const status = String(trade.status || "no script");
+      return hopper.online === false || ["no script", "disconnected", "error"].includes(status) || (status !== "stopped" && trade.fresh === false);
+    });
+    const targets = [...new Set(rows.map((hopper) => hopper.target).filter(Boolean))];
+    const trades = rows.reduce((total, hopper) => total + Number((hopper.trade || {}).count || 0), 0);
+    const longestRuntime = Math.max(0, ...rows.map((hopper) => Number(hopper.runtime) || 0));
+    return { total: rows.length, running, reporting, attention, targets, trades, longestRuntime };
+  }
+
+  function renderPhones(phones, targetId = "phone-cards", hoppers = []) {
     const target = $(targetId);
     if (!target) return;
-    target.innerHTML = phones.map((phone) => {
-      const board = phone.board || "No report yet.";
+    // Polling rebuilds these cards. Keep the open state tied to this exact
+    // panel and card position so Phone A cannot restore Phone B's state.
+    const openDiagnostics = new Set([...target.querySelectorAll("details.phone-raw[open]")].map((details) => details.dataset.diagnosticsKey));
+    target.innerHTML = phones.map((phone, index) => {
+      const diagnosticsKey = `${targetId}:${index}:${String(phone.phone ?? "")}`;
+      const phoneRows = hoppers.filter((hopper) => String(hopper.phone) === String(phone.phone));
+      const summary = phoneHopperSummary(phoneRows);
       const age = phone.last_seen_seconds == null ? "never" : `${phone.last_seen_seconds}s ago`;
-      return `<article class="phone-card ${phone.online ? "" : "offline"}"><div class="phone-card-head"><h3>Phone ${escapeHtml(phone.phone)}</h3><span class="status ${phone.online ? "online" : ""}">${phone.online ? "Online" : "Offline"}</span></div><p class="phone-footer">${escapeHtml(phone.footer || "No device health report")} &middot; last seen ${escapeHtml(age)}</p><pre class="phone-board">${escapeHtml(board)}</pre></article>`;
+      const health = String(phone.footer || "No device health report").split("|").map((part) => part.trim()).filter(Boolean);
+      const healthHtml = health.map((part) => `<span>${escapeHtml(part)}</span>`).join("");
+      const targetHtml = summary.targets.length ? summary.targets.map((item) => `<span>${escapeHtml(item)}</span>`).join("") : `<span class="muted">No targets</span>`;
+      const attentionDetails = summary.attention.slice(0, 3).map((hopper) => {
+        const tradeStatus = String((hopper.trade || {}).status || "no script");
+        const label = tradeStatus === "no script" ? "waiting heartbeat" : tradeStatus === "disconnected" ? "rejoining" : tradeStatus === "error" ? "error" : "stale";
+        return `H${hopper.hopper} ${label}`;
+      });
+      const issueText = summary.attention.length
+        ? `${summary.attention.length} need attention: ${attentionDetails.join(", ")}${summary.attention.length > attentionDetails.length ? `, +${summary.attention.length - attentionDetails.length} more` : ""}`
+        : "All hopper reports healthy";
+      const issueClass = summary.attention.length ? " has-issues" : "";
+      return `<article class="phone-card ${phone.online ? "" : "offline"}">
+        <div class="phone-card-head"><div><h3>Phone ${escapeHtml(phone.phone)}</h3><span class="phone-last-seen">Last seen ${escapeHtml(age)}</span></div><span class="status ${phone.online ? "online" : ""}">${phone.online ? "Online" : "Offline"}</span></div>
+        <div class="phone-health">${healthHtml || `<span>No device health report</span>`}</div>
+        <div class="phone-kpis"><div><strong>${integer(summary.running)}/${integer(summary.total)}</strong><span>hoppers ready</span></div><div><strong>${integer(summary.reporting)}</strong><span>trade reports</span></div><div><strong>${integer(summary.trades)}</strong><span>trades reported</span></div></div>
+        <div class="phone-card-row"><span>Targets</span><div class="phone-chips">${targetHtml}</div></div>
+        <p class="phone-attention${issueClass}">${escapeHtml(issueText)}${summary.longestRuntime ? ` &middot; longest session ${escapeHtml(duration(summary.longestRuntime))}` : ""}</p>
+        <details class="phone-raw" data-phone="${escapeHtml(phone.phone)}" data-diagnostics-key="${escapeHtml(diagnosticsKey)}"><summary>Agent diagnostics</summary><pre class="phone-board">${escapeHtml(phone.board || "No raw report yet.")}</pre></details>
+      </article>`;
     }).join("") || `<p class="empty">No phones configured.</p>`;
+    target.querySelectorAll("details.phone-raw[data-diagnostics-key]").forEach((details) => {
+      details.open = openDiagnostics.has(details.dataset.diagnosticsKey);
+    });
   }
 
   function hopperSearchMatch(hopper) {
@@ -277,37 +389,123 @@
 
   function renderSummary(summary, hoppers) {
     $("metric-income").textContent = money(summary.value && summary.value.usd);
-    $("metric-hoppers").textContent = integer(hoppers.length);
-    $("metric-pets").textContent = integer(summary.pets);
+    const onlineHoppers = (hoppers || []).filter((hopper) => {
+      const state = String(hopper.status || "").toLowerCase();
+      return hopper.online !== false && !["offline", "stopped"].includes(state);
+    }).length;
+    $("metric-hoppers").textContent = integer(onlineHoppers);
     $("metric-online").textContent = `${integer(summary.online)}/${integer(summary.phones)}`;
+    const rejoin = summary.rejoin || {};
+    const rejoinValue = $("metric-rejoin-online");
+    const rejoinNote = $("metric-rejoin-note");
+    if (rejoin.available && Number.isFinite(Number(rejoin.online_accounts)) && Number.isFinite(Number(rejoin.total_accounts))) {
+      rejoinValue.textContent = `${integer(rejoin.online_accounts)}/${integer(rejoin.total_accounts)}`;
+      const age = rejoin.age == null ? "just now" : `${integer(rejoin.age)}s ago`;
+      rejoinNote.textContent = `${rejoin.mode || "reported"} · ${age}`;
+    } else {
+      rejoinValue.textContent = "-";
+      rejoinNote.textContent = rejoin.age == null ? "Listener not connected" : "Listener data stale";
+    }
+    const balance = summary.highspec_balance || {};
+    const balanceValue = $("metric-highspec-balance");
+    const balanceNote = $("metric-highspec-balance-note");
+    if (!balance.configured) {
+      balanceValue.textContent = "-";
+      balanceNote.textContent = "API key not configured";
+    } else if (balance.available && Number.isFinite(Number(balance.usd))) {
+      balanceValue.textContent = money(balance.usd);
+      balanceNote.textContent = `Converted from ${integer(balance.points)} points`;
+    } else {
+      balanceValue.textContent = balance.loading ? "Loading" : "Unavailable";
+      balanceNote.textContent = balance.loading ? "Refreshing balance" : "Could not refresh";
+    }
+    const zeroBalance = summary.zerounlock_balance || {};
+    const zeroValue = $("metric-zeropoint-balance");
+    const zeroNote = $("metric-zeropoint-balance-note");
+    if (!zeroBalance.configured) {
+      zeroValue.textContent = "-";
+      zeroNote.textContent = "API key not configured";
+    } else if (zeroBalance.available && Number.isFinite(Number(zeroBalance.effective))) {
+      zeroValue.textContent = money(zeroBalance.effective);
+      const total = Number.isFinite(Number(zeroBalance.balance)) ? money(zeroBalance.balance) : "-";
+      const reserved = Number.isFinite(Number(zeroBalance.reserved)) ? money(zeroBalance.reserved) : "-";
+      zeroNote.textContent = `Spendable; total ${total}, reserved ${reserved}`;
+    } else {
+      zeroValue.textContent = zeroBalance.loading ? "Loading" : "Unavailable";
+      zeroNote.textContent = zeroBalance.loading ? "Refreshing balance" : "Could not refresh";
+    }
   }
 
   function renderCharts(pets) {
     const priced = (pets || []).filter((pet) => Number(pet.value_usd) > 0).sort((a, b) => Number(b.value_usd) - Number(a.value_usd)).slice(0, 5);
+    const incomeTotal = (pets || []).reduce((sum, pet) => sum + (Number(pet.value_usd) > 0 ? Number(pet.value_usd) : 0), 0);
+    const incomeValue = $("income-total");
+    const incomeNote = $("income-total-note");
+    if (incomeValue) incomeValue.textContent = priced.length ? money(incomeTotal) : "-";
+    if (incomeNote) incomeNote.textContent = priced.length ? `${integer(priced.length)} priced pet types shown` : "Waiting for priced inventory";
     const incomeBars = $("income-bars");
     if (!priced.length) incomeBars.innerHTML = `<p class="empty">Waiting for priced inventory</p>`;
     else {
       const max = Math.max(...priced.map((pet) => Number(pet.value_usd)));
       incomeBars.innerHTML = priced.map((pet) => `<div class="bar-row"><span class="bar-label">${escapeHtml(pet.name)}${pet.variant === "default" ? "" : ` (${escapeHtml(pet.variant.replace("_", " "))})`}</span><div class="bar-track"><span style="width:${Math.max(2, Math.round((pet.value_usd / max) * 100))}%"></span></div><span class="bar-value">${money(pet.value_usd)}</span></div>`).join("");
     }
-    const volume = (pets || []).slice(0, 7);
-    const mix = $("pet-mix-chart");
-    $("pet-mix-total").textContent = `${integer((pets || []).reduce((sum, pet) => sum + Number(pet.count || 0), 0))} pets`;
-    if (!volume.length) mix.innerHTML = `<p class="empty">Waiting for inventory</p>`;
-    else {
-      const max = Math.max(...volume.map((pet) => Number(pet.count || 0)), 1);
-      mix.innerHTML = volume.map((pet) => `<div class="mix-column"><span style="height:${Math.max(3, Math.round((pet.count / max) * 100))}%"></span><label title="${escapeHtml(pet.name)}">${escapeHtml(pet.name)}</label></div>`).join("");
+  }
+
+  function renderRejoinHistory(rejoin) {
+    const chart = $("rejoin-history-chart");
+    const note = $("rejoin-history-note");
+    if (!chart || !note) return;
+    const rows = Array.isArray(rejoin && rejoin.history) ? rejoin.history.filter((row) => Number.isFinite(Number(row.ts))) : [];
+    if (!rows.length) {
+      note.textContent = "Waiting for snapshots";
+      chart.innerHTML = `<p class="empty">Waiting for rejoin snapshots</p>`;
+      return;
     }
+    const width = 720;
+    const height = 210;
+    const padX = 26;
+    const padY = 24;
+    const baseline = height - padY;
+    const onlineValues = rows.map((row) => Number(row.online_accounts) || 0);
+    const observedMin = Math.min(...onlineValues);
+    const observedMax = Math.max(...onlineValues);
+    const observedSpread = observedMax - observedMin;
+    // Zoom to the observed online range so normal fluctuations remain visible.
+    // The labels make the zoomed scale explicit instead of implying a 0-based axis.
+    const scalePadding = Math.max(12, observedSpread * 0.25, observedMax * 0.005);
+    const minScale = Math.max(0, Math.floor(observedMin - scalePadding));
+    const maxScale = Math.max(minScale + 1, Math.ceil(observedMax + scalePadding));
+    const scaleRange = maxScale - minScale;
+    const xFor = (index) => rows.length === 1 ? width / 2 : padX + (index / (rows.length - 1)) * (width - padX * 2);
+    const yFor = (value) => baseline - ((Math.max(minScale, Number(value) || 0) - minScale) / scaleRange) * (baseline - padY);
+    const points = rows.map((row, index) => `${xFor(index).toFixed(1)},${yFor(row.online_accounts).toFixed(1)}`);
+    const first = points[0].split(",");
+    const last = points[points.length - 1].split(",");
+    const areaPath = `M ${first[0]} ${baseline} L ${points.join(" L ")} L ${last[0]} ${baseline} Z`;
+    const linePath = `M ${points.join(" L ")}`;
+    const latest = rows[rows.length - 1];
+    const age = rejoin.age == null ? "just now" : `${integer(rejoin.age)}s ago`;
+    note.textContent = `${integer(latest.online_accounts)}/${integer(latest.total_accounts)} · ${age}`;
+    const grid = [0, 0.5, 1].map((fraction) => {
+      const value = minScale + scaleRange * fraction;
+      const y = yFor(value).toFixed(1);
+      return `<line class="rejoin-grid" x1="${padX}" y1="${y}" x2="${width - padX}" y2="${y}"><title>${integer(value)} accounts</title></line><text class="rejoin-y-label" x="${padX - 6}" y="${Number(y) + 3}" text-anchor="end">${integer(value)}</text>`;
+    }).join("");
+    chart.innerHTML = `<svg class="rejoin-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Rejoin accounts over time" preserveAspectRatio="none"><defs><linearGradient id="rejoin-area-fill" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".34"></stop><stop offset="1" stop-color="var(--accent)" stop-opacity="0"></stop></linearGradient></defs>${grid}<path class="rejoin-area" d="${areaPath}"></path><path class="rejoin-line" d="${linePath}"></path><circle class="rejoin-point" cx="${last[0]}" cy="${last[1]}" r="4"><title>${integer(latest.online_accounts)} online accounts</title></circle><text class="rejoin-axis-label" x="${padX}" y="${height - 5}">${escapeHtml(new Date(Number(rows[0].ts) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}</text><text class="rejoin-axis-label" x="${width - padX}" y="${height - 5}" text-anchor="end">${escapeHtml(new Date(Number(latest.ts) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))}</text></svg>`;
   }
 
   function renderInventory(rows) {
     const body = $("inventory-body");
-    if (!rows || !rows.length) { body.innerHTML = `<tr><td colspan="4" class="empty">No inventory report yet</td></tr>`; return; }
+    const count = Array.isArray(rows) ? rows.length : 0;
+    const countNote = $("inventory-count-note");
+    if (countNote) countNote.textContent = `${integer(count)} account${count === 1 ? "" : "s"}`;
+    if (!count) { body.innerHTML = `<tr><td colspan="4" class="empty">No inventory report yet</td></tr>`; return; }
     body.innerHTML = rows.map((row) => { const stats = row.stats || {}; return `<tr><td>${escapeHtml(row.player || "?")}</td><td>${integer(stats.bucks ?? row.money)}</td><td>${integer(stats.petCount)}</td><td>${integer(stats.eggCount)}</td></tr>`; }).join("");
   }
 
   function renderPets(pets) {
-    const rows = pets || [];
+    const rows = Array.isArray(pets) ? pets : [];
+    currentPets = rows;
     const total = rows.reduce((sum, pet) => sum + Number(pet.count || 0), 0);
     const fullGrown = rows.reduce((sum, pet) => sum + Number(pet.full_grown || 0), 0);
     const priced = rows.filter((pet) => pet.priced || Number(pet.value_usd) > 0).length;
@@ -327,15 +525,16 @@
       distribution.innerHTML = top.map((pet) => `<div class="bar-row"><span class="bar-label">${escapeHtml(pet.name)}${pet.variant === "default" ? "" : ` (${escapeHtml(pet.variant.replace("_", " "))})`}</span><div class="bar-track"><span style="width:${Math.max(2, Math.round((pet.count / max) * 100))}%;background:${statusClass(pet.rarity) === "legendary" ? "var(--warning)" : statusClass(pet.rarity) === "ultra" ? "var(--violet)" : "var(--blue)"}"></span></div><span class="bar-value">${integer(pet.count)}</span></div>`).join("");
     }
     const body = $("pet-track-body");
-    if (!rows.length) { body.innerHTML = `<tr><td colspan="6" class="empty">No pets reported yet</td></tr>`; return; }
-    const maxCount = Math.max(...rows.map((pet) => Number(pet.count || 0)), 1);
-    body.innerHTML = rows.map((pet) => {
+    updatePetSortIndicators();
+    if (!rows.length) { body.innerHTML = `<tr><td colspan="5" class="empty">No pets reported yet</td></tr>`; return; }
+    const tableRows = sortedPets(rows);
+    body.innerHTML = tableRows.map((pet) => {
       const variant = pet.variant === "default" ? "" : pet.variant.replace("_", " ");
       const rarity = pet.rarity || "Unrated";
       const cls = statusClass(rarity);
       const count = Number(pet.count || 0);
       const grown = Number(pet.full_grown || 0);
-      return `<tr><td><span class="pet-name">${escapeHtml(pet.name)}</span><span class="pet-variant">${escapeHtml(variant || "standard")}</span></td><td><span class="rarity-chip ${cls}">${escapeHtml(rarity)}</span></td><td>${integer(count)}</td><td>${integer(grown)}</td><td><div class="pet-progress"><div class="progress-track"><span style="width:${Math.min(100, Math.round((count / maxCount) * 100))}%"></span></div><small>${count ? Math.round((grown / count) * 100) : 0}% FG</small></div></td><td>${pet.priced || Number(pet.value_usd) > 0 ? money(pet.value_usd) : "-"}</td></tr>`;
+      return `<tr><td><span class="pet-name">${escapeHtml(pet.name)}</span><span class="pet-variant">${escapeHtml(variant || "standard")}</span></td><td><span class="rarity-chip ${cls}">${escapeHtml(rarity)}</span></td><td>${integer(count)}</td><td>${integer(grown)}</td><td>${pet.priced || Number(pet.value_usd) > 0 ? money(pet.value_usd) : "-"}</td></tr>`;
     }).join("");
   }
 
@@ -344,13 +543,14 @@
     renderPhoneOptions(data.available_phones || phones.map((phone) => phone.phone));
     renderSummary(data.summary, data.hoppers || []);
     renderCharts(data.pets || []);
+    renderRejoinHistory((data.summary || {}).rejoin || {});
     renderHoppers(data.hoppers || []);
     if ($("rotation-dialog").open && rotationHopperId) {
       const hopper = hopperById(rotationHopperId);
       if (hopper) renderSavedRotation(hopper);
     }
-    renderPhones(phones);
-    renderPhones(phones, "hopper-phone-cards");
+    renderPhones(phones, "phone-cards", data.hoppers || []);
+    renderPhones(phones, "hopper-phone-cards", data.hoppers || []);
     renderInventory(data.inventory);
     renderPets(data.pets);
     $("sidebar-updated").textContent = pollingIsActive() ? "Live updates" : "Paused while tab is inactive";
@@ -496,11 +696,13 @@
   $("hopper-body").addEventListener("click", (event) => { const button = event.target.closest("[data-hopper-action]"); if (!button) return; const hopper = hopperById(button.dataset.hopperId); if (!hopper) return; if (button.dataset.hopperAction === "rotation") openRotation(hopper); else sendHopperCommands(button.dataset.hopperAction, [hopper]); });
   $("hopper-bulk-start").addEventListener("click", () => sendHopperCommands("start", currentHoppers.filter((hopper) => selectedHoppers.has(hopper.id))));
   $("hopper-bulk-stop").addEventListener("click", () => sendHopperCommands("stop", currentHoppers.filter((hopper) => selectedHoppers.has(hopper.id))));
+  document.querySelectorAll("[data-pet-sort]").forEach((button) => button.addEventListener("click", () => sortPets(button.dataset.petSort)));
   $("rotation-form").addEventListener("submit", saveRotation);
   $("rotation-close").addEventListener("click", closeRotation);
   $("rotation-cancel").addEventListener("click", closeRotation);
   $("rotation-dialog").addEventListener("cancel", () => { rotationHopperId = null; });
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => sendCommand(button.dataset.action, actionPayload(button.dataset.action))));
   restoreSidebarCollapsed();
+  updatePetSortIndicators();
   restoreSession();
 })();

@@ -14,8 +14,10 @@
 !web/
 !web/.gitignore
 !web/server.py
+!web/rejoin_listener.py
 !web/seeder.py
 !web/config.example.txt
+!web/rejoin_listener.example.txt
 !web/requirements.txt
 !web/README.md
 !web/hoppers.example.json
