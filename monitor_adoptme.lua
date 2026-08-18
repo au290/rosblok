@@ -20,6 +20,81 @@ local LP       = Players.LocalPlayer
 
 VPS_URL = VPS_URL:gsub("/+$", "")
 
+-- Adopt Me keeps the canonical kind/id on inventory entries and the public
+-- display name in ClientDB.ItemDB. Resolve from that live database only.
+local ItemDB
+do
+    local clientDb = RS:FindFirstChild("ClientDB")
+    local module = clientDb and clientDb:FindFirstChild("ItemDB", true)
+    if not module then
+        for _, descendant in ipairs(RS:GetDescendants()) do
+            if descendant:IsA("ModuleScript") and descendant.Name == "ItemDB" then
+                module = descendant
+                break
+            end
+        end
+    end
+    if module then
+        local ok, data = pcall(require, module)
+        if ok and type(data) == "table" then ItemDB = data end
+    end
+end
+
+local displayNameCache = {}
+local function firstString(value, keys)
+    if type(value) ~= "table" then return nil end
+    for _, key in ipairs(keys) do
+        local candidate = value[key]
+        if type(candidate) == "string" and candidate ~= "" then return candidate end
+    end
+    return nil
+end
+
+local function findItemDefinition(root, wanted, depth, seen)
+    if type(root) ~= "table" or depth > 5 then return nil end
+    seen = seen or {}
+    if seen[root] then return nil end
+    seen[root] = true
+    for key, value in pairs(root) do
+        if tostring(key) == wanted then
+            if type(value) == "string" and value ~= "" then return value end
+            if type(value) == "table" then
+                local name = firstString(value, { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                if name then return name end
+                for _, nestedKey in ipairs({ "data", "info", "item", "pet", "definition" }) do
+                    local nestedName = firstString(value[nestedKey], { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                    if nestedName then return nestedName end
+                end
+            end
+        end
+        if type(value) == "table" then
+            local found = findItemDefinition(value, wanted, depth + 1, seen)
+            if found then return found end
+        end
+    end
+    return nil
+end
+
+local function officialDisplayName(kind)
+    kind = tostring(kind or "")
+    if displayNameCache[kind] ~= nil then return displayNameCache[kind] or nil end
+    local name = ItemDB and findItemDefinition(ItemDB, kind, 0)
+    if not name and not ItemDB and type(getgc) == "function" then
+        local ok, objects = pcall(function() return getgc(true) end)
+        if ok and type(objects) == "table" then
+            for _, object in pairs(objects) do
+                if type(object) == "table" then
+                    local value = rawget(object, kind)
+                    name = type(value) == "string" and value or firstString(value, { "name", "display_name", "displayName", "localized_name", "display", "label", "title", "text" })
+                    if name then break end
+                end
+            end
+        end
+    end
+    displayNameCache[kind] = name or false
+    return name
+end
+
 local function request_function()
     return (syn and syn.request) or (http and http.request) or http_request or request
 end
@@ -85,7 +160,7 @@ local function getStats()
     if not me then return nil end
     local money = tonumber(me.money) or 0
 
-    local petCount, eggCount = 0, 0
+    local petCount, eggCount, unresolvedCount = 0, 0, 0
     local byType, eggsByType = {}, {}
     local pets = me.inventory and me.inventory.pets
     if type(pets) == "table" then
@@ -104,10 +179,12 @@ local function getStats()
                     local neon = props.neon == true
                     local mega = props.mega_neon == true
                     local key  = kind
+                    local displayName = officialDisplayName(kind)
+                    if not displayName then unresolvedCount = unresolvedCount + 1 end
                     if mega then key = key .. " (mega neon)" elseif neon then key = key .. " (neon)" end
                     local t = byType[key]
                     if not t then
-                        t = { count = 0, fg = 0, kind = kind, neon = neon, mega = mega }
+                        t = { count = 0, fg = 0, kind = kind, display_name = displayName, neon = neon, mega = mega }
                         byType[key] = t
                     end
                     t.count = t.count + 1
@@ -116,7 +193,7 @@ local function getStats()
             end
         end
     end
-    return money, { count = petCount, eggs = eggCount, by_type = byType, eggs_by_type = eggsByType }
+    return money, { count = petCount, eggs = eggCount, unresolved = unresolvedCount, by_type = byType, eggs_by_type = eggsByType }
 end
 
 local function report()
@@ -129,7 +206,7 @@ local function report()
     local account = {
         player = LP.Name,
         money  = money,
-        stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs },
+        stats  = { bucks = money, petCount = pets.count, eggCount = pets.eggs, unresolvedPetCount = pets.unresolved },
         pets   = pets,
     }
     local payload = HttpService:JSONEncode({
