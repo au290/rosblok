@@ -27,12 +27,31 @@ phone-agent configuration, rotations, seeding, and deployment details.
 ## One-line Setup
 
 On the Windows 11 VPS, open PowerShell and run this one line. It installs Python
-through `winget` when needed, creates the web virtualenv, generates missing
-`KEY` and `WEB_TOKEN` values, and configures automatic startup:
+through `winget` when needed, downloads the latest web dashboard and Rejoin
+listener, updates the virtualenv, preserves existing secrets, and configures
+automatic startup:
 
 ```powershell
 $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.ps1" -UseBasicParsing -ErrorAction Stop -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
 ```
+
+Run the same line whenever you want to update the VPS. It restarts the web
+task and, when Rejoin credentials are present, the Rejoin listener task too.
+The listener config is kept at `web\rejoin_listener.txt` and is ignored by Git.
+On the first install, fill `SOURCE_SCRIPT_KEY` and `SOURCE_PASSWORD` there,
+then run the same update line once more. The listener will then start at VPS
+boot and write its log to `web\rejoin_listener.log`.
+
+For a non-interactive first install, pass the credentials as process-scoped
+PowerShell environment variables. They are written only to the VPS config and are not
+part of the repository:
+
+```powershell
+$env:PANEN_REJOIN_SCRIPT_KEY='your-script-key'; $env:PANEN_REJOIN_PASSWORD='your-password'; $ErrorActionPreference='Stop'; $p="$env:TEMP\panen-vps.ps1"; Invoke-WebRequest "https://raw.githubusercontent.com/au290/rosblok/main/setup-vps.ps1" -UseBasicParsing -ErrorAction Stop -OutFile $p; & powershell -NoProfile -ExecutionPolicy Bypass -File $p
+```
+
+The listener sends only aggregate online/total counts to the local web server;
+source usernames, passwords, and cookies stay on the VPS.
 
 On an Android phone running Termux, run the phone installer. It preserves
 existing settings and asks only for missing required values:

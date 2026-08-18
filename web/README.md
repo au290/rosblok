@@ -26,7 +26,18 @@ The installer uses `$env:PANEN_DIR` when set and otherwise installs to
 `$env:USERPROFILE\panen`. Run PowerShell as Administrator to register an
 at-startup scheduled task; without elevation it installs a per-user Startup
 shortcut instead. Credentials are preserved across reruns in `web/config.txt`
-and its local `.credentials` recovery file.
+and its local `.credentials` recovery file. Re-running this command is the
+one-command VPS update: it downloads the latest web files and restarts the
+web task without replacing your local config.
+
+The same installer also downloads `rejoin_listener.py` and creates
+`web\rejoin_listener.txt`. Fill `SOURCE_SCRIPT_KEY` and `SOURCE_PASSWORD` in
+that file once, then rerun the same command. The installer registers
+`HopperFleetRejoinListener` to start at boot and keeps its output in
+`web\rejoin_listener.log`. To provide them during the first run without
+editing the file, set `PANEN_REJOIN_SCRIPT_KEY` and `PANEN_REJOIN_PASSWORD`
+before invoking the installer. The listener posts only aggregate counts to
+`http://127.0.0.1:<PORT>` and reads the web `KEY` from `config.txt`.
 
 ```powershell
 cd web
@@ -264,12 +275,13 @@ python rejoin_listener.py --once
 python rejoin_listener.py
 ```
 
-Fill `SOURCE_SCRIPT_KEY`, `SOURCE_PASSWORD`, `ACCOUNT_DB` (or use
-`TOTAL_ACCOUNTS=observed`), and `TARGET_KEY` in `rejoin_listener.txt`.
-`SOURCE_CREDENTIALS_FILE` can point at a local credentials script such as
-`../resource/nega.py`; `TARGET_KEY_FILE=config.txt` can read the web `KEY`
-without copying it. `TARGET_KEY` is the web server `KEY`, not the browser
-`WEB_TOKEN`. The dashboard shows the result as `online / total` in the
+Fill `SOURCE_SCRIPT_KEY`, `SOURCE_PASSWORD`, and `ACCOUNT_DB` (or use
+`TOTAL_ACCOUNTS=observed`) in `rejoin_listener.txt`. The Windows installer
+sets `TARGET_URL` to the local server and `TARGET_KEY_FILE=config.txt`, so it
+uses the web server `KEY` without copying it. `SOURCE_CREDENTIALS_FILE` can
+point at a local credentials script such as `../resource/nega.py` instead.
+For a manual remote target, set `TARGET_KEY` to the web server `KEY`, never the
+browser `WEB_TOKEN`. The dashboard shows the result as `online / total` in the
 Executive Summary. A listener update older than `REJOIN_STATS_GRACE` seconds
 is shown as stale.
 

@@ -1,6 +1,11 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDir = $(if ($env:PANEN_DIR) { $env:PANEN_DIR } else { Join-Path $env:USERPROFILE "panen" })
+    [string]$InstallDir = $(if ($env:PANEN_DIR) { $env:PANEN_DIR } else { Join-Path $env:USERPROFILE "panen" }),
+    [string]$RejoinSourceUrl = $(if ($env:PANEN_REJOIN_SOURCE_URL) { $env:PANEN_REJOIN_SOURCE_URL } else { "" }),
+    [string]$RejoinScriptKey = $(if ($env:PANEN_REJOIN_SCRIPT_KEY) { $env:PANEN_REJOIN_SCRIPT_KEY } else { "" }),
+    [string]$RejoinPassword = $(if ($env:PANEN_REJOIN_PASSWORD) { $env:PANEN_REJOIN_PASSWORD } else { "" }),
+    [string]$RejoinAccountDb = $(if ($env:PANEN_REJOIN_ACCOUNT_DB) { $env:PANEN_REJOIN_ACCOUNT_DB } else { "" }),
+    [switch]$SkipRejoinListener
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +16,7 @@ $Raw = "https://raw.githubusercontent.com/au290/rosblok/main"
 $WebDir = Join-Path $InstallDir "web"
 $ConfigPath = Join-Path $WebDir "config.txt"
 $CredentialPath = Join-Path $WebDir ".credentials"
+$RejoinConfigPath = Join-Path $WebDir "rejoin_listener.txt"
 $Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 function Write-Step([string]$Message) {
@@ -83,6 +89,8 @@ $Files = @(
     "web/server.py",
     "web/requirements.txt",
     "web/config.example.txt",
+    "web/rejoin_listener.py",
+    "web/rejoin_listener.example.txt",
     "web/hoppers.example.json",
     "web/assets/index.html",
     "web/assets/app.js",
@@ -177,6 +185,51 @@ $TokenValue = Ensure-Secret "WEB_TOKEN" "CHANGE_ME_WEB_TOKEN"
 if ([string]::IsNullOrWhiteSpace((Get-ConfigValue "HOST"))) { Set-ConfigValue "HOST" "0.0.0.0" }
 if ([string]::IsNullOrWhiteSpace((Get-ConfigValue "PORT"))) { Set-ConfigValue "PORT" "8090" }
 
+$Port = 8090
+[void][int]::TryParse((Get-ConfigValue "PORT"), [ref]$Port)
+
+function Get-RejoinValue([string]$Name) {
+    if (-not (Test-Path -LiteralPath $RejoinConfigPath)) { return "" }
+    $pattern = "^\s*" + [regex]::Escape($Name) + "\s*=(.*)$"
+    foreach ($line in [IO.File]::ReadAllLines($RejoinConfigPath)) {
+        if ($line -match $pattern) { return $Matches[1].Trim() }
+    }
+    return ""
+}
+
+function Set-RejoinValue([string]$Name, [string]$Value) {
+    $pattern = "^\s*" + [regex]::Escape($Name) + "\s*="
+    $output = @()
+    $found = $false
+    if (Test-Path -LiteralPath $RejoinConfigPath) {
+        foreach ($line in [IO.File]::ReadAllLines($RejoinConfigPath)) {
+            if ($line -match $pattern) {
+                if (-not $found) { $output += "$Name=$Value" }
+                $found = $true
+            } else {
+                $output += $line
+            }
+        }
+    }
+    if (-not $found) { $output += "$Name=$Value" }
+    [IO.File]::WriteAllLines($RejoinConfigPath, [string[]]$output, $Utf8NoBom)
+}
+
+if (-not $SkipRejoinListener) {
+    if (-not (Test-Path -LiteralPath $RejoinConfigPath)) {
+        Copy-Item (Join-Path $WebDir "rejoin_listener.example.txt") $RejoinConfigPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($RejoinSourceUrl)) { Set-RejoinValue "SOURCE_URL" $RejoinSourceUrl }
+    if (-not [string]::IsNullOrWhiteSpace($RejoinScriptKey)) { Set-RejoinValue "SOURCE_SCRIPT_KEY" $RejoinScriptKey }
+    if (-not [string]::IsNullOrWhiteSpace($RejoinPassword)) { Set-RejoinValue "SOURCE_PASSWORD" $RejoinPassword }
+    if (-not [string]::IsNullOrWhiteSpace($RejoinAccountDb)) { Set-RejoinValue "ACCOUNT_DB" $RejoinAccountDb }
+    if ([string]::IsNullOrWhiteSpace((Get-RejoinValue "TARGET_URL")) -or (Get-RejoinValue "TARGET_URL") -eq "https://agent.kqing.web.id") {
+        Set-RejoinValue "TARGET_URL" "http://127.0.0.1:$Port"
+    }
+    Set-RejoinValue "TARGET_KEY_FILE" "config.txt"
+    Write-Step "rejoin listener installed: $RejoinConfigPath"
+}
+
 $VenvDir = Join-Path $InstallDir ".venv"
 Write-Step "creating Python virtualenv"
 Invoke-Checked $Python @("-m", "venv", $VenvDir)
@@ -248,12 +301,75 @@ if ($isAdmin -and (Get-Command Register-ScheduledTask -ErrorAction SilentlyConti
     Write-Step "started server and added it to the current user's Startup folder"
 }
 
-$Port = 8090
-[void][int]::TryParse((Get-ConfigValue "PORT"), [ref]$Port)
 if ($isAdmin -and (Get-Command Get-NetFirewallRule -ErrorAction SilentlyContinue)) {
     $ruleName = "Hopper Fleet Web $Port"
     if (-not (Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Protocol TCP -LocalPort $Port -Action Allow | Out-Null
+    }
+}
+
+if (-not $SkipRejoinListener) {
+    $ListenerKey = Get-RejoinValue "SOURCE_SCRIPT_KEY"
+    $ListenerPassword = Get-RejoinValue "SOURCE_PASSWORD"
+    $ListenerPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
+    $ListenerScript = Join-Path $WebDir "rejoin_listener.py"
+    $ListenerPidFile = Join-Path $WebDir "rejoin_listener.pid"
+    $ListenerLogFile = Join-Path $WebDir "rejoin_listener.log"
+    $ListenerLauncherPath = Join-Path $InstallDir "run-rejoin-listener.ps1"
+    $ListenerLauncher = @'
+$ErrorActionPreference = "Stop"
+$AppDir = $PSScriptRoot
+$PidFile = Join-Path $AppDir "web\rejoin_listener.pid"
+$LogFile = Join-Path $AppDir "web\rejoin_listener.log"
+$Python = Join-Path $AppDir ".venv\Scripts\python.exe"
+$Script = Join-Path $AppDir "web\rejoin_listener.py"
+[IO.File]::WriteAllText($PidFile, [string]$PID)
+try {
+    Set-Location (Join-Path $AppDir "web")
+    & $Python $Script *>> $LogFile
+} finally {
+    if ((Test-Path $PidFile) -and ((Get-Content $PidFile -Raw).Trim() -eq [string]$PID)) {
+        Remove-Item $PidFile -Force
+    }
+}
+'@
+    [IO.File]::WriteAllText($ListenerLauncherPath, $ListenerLauncher, $Utf8NoBom)
+
+    if ($ListenerKey -and $ListenerPassword) {
+        if (Test-Path -LiteralPath $ListenerPidFile) {
+            $oldListenerPid = 0
+            if ([int]::TryParse((Get-Content $ListenerPidFile -Raw).Trim(), [ref]$oldListenerPid)) {
+                $oldListener = Get-Process -Id $oldListenerPid -ErrorAction SilentlyContinue
+                if ($oldListener) { Stop-Process -Id $oldListenerPid -Force; Start-Sleep -Milliseconds 500 }
+            }
+            Remove-Item $ListenerPidFile -Force -ErrorAction SilentlyContinue
+        }
+        $ListenerArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ListenerLauncherPath`""
+        if ($isAdmin -and (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
+            $listenerTaskName = "HopperFleetRejoinListener"
+            $existingListenerTask = Get-ScheduledTask -TaskName $listenerTaskName -ErrorAction SilentlyContinue
+            if ($existingListenerTask) { Stop-ScheduledTask -TaskName $listenerTaskName -ErrorAction SilentlyContinue }
+            $listenerAction = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $ListenerArgs -WorkingDirectory $InstallDir
+            $listenerTrigger = New-ScheduledTaskTrigger -AtStartup
+            $listenerSettings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+            Register-ScheduledTask -TaskName $listenerTaskName -Action $listenerAction -Trigger $listenerTrigger -Settings $listenerSettings -User "SYSTEM" -RunLevel Highest -Force | Out-Null
+            Start-ScheduledTask -TaskName $listenerTaskName
+            Write-Step "registered and started scheduled task $listenerTaskName"
+        } else {
+            $startup = [Environment]::GetFolderPath("Startup")
+            $shortcutPath = Join-Path $startup "HopperFleetRejoinListener.lnk"
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            $shortcut.TargetPath = $PowerShellExe
+            $shortcut.Arguments = $ListenerArgs
+            $shortcut.WorkingDirectory = $InstallDir
+            $shortcut.WindowStyle = 7
+            $shortcut.Save()
+            Start-Process -FilePath $PowerShellExe -ArgumentList $ListenerArgs -WindowStyle Hidden
+            Write-Step "started rejoin listener and added it to the current user's Startup folder"
+        }
+    } else {
+        Write-Warning "Rejoin listener is installed but not started. Fill SOURCE_SCRIPT_KEY and SOURCE_PASSWORD in $RejoinConfigPath, then rerun this same setup command."
     }
 }
 
