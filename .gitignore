@@ -18,6 +18,7 @@
 !web/seeder.py
 !web/config.example.txt
 !web/rejoin_listener.example.txt
+!web/test_trackstat.py
 !web/requirements.txt
 !web/README.md
 !web/hoppers.example.json

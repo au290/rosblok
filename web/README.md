@@ -219,6 +219,18 @@ the next agent poll restores the saved links in the web dashboard.
 
 ## Direct Adopt Me inventory reporting
 
+To test Trackstat without opening Roblox, run the synthetic client from the
+repository root. It sends one sample account to the public web endpoint:
+
+```powershell
+python web/test_trackstat.py --key YOUR_WEB_KEY
+```
+
+Keep the sample fresh while inspecting the dashboard with `--interval 30`.
+The test row expires after the server's inventory grace period when the
+process is stopped. Set `PANEN_KEY` instead of passing the key on the command
+line if you do not want it in PowerShell history.
+
 `monitor_adoptme.lua` can report the currently logged-in Adopt Me account
 straight to this web server. It no longer needs `writefile`, the local `inv/`
 folder, or `agent.py` to move inventory data. Install the script in the
