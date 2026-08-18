@@ -25,7 +25,7 @@ getgenv().VO_CONFIG = {
     PrioritizePetPenTypes = {"Neon"},  -- "Egg", "Normal", "Neon" (empty = all)
 
     -- === PET RELEASER ===
-    PetReleaser = true,
+    PetReleaser = false,
     ReleasePets = {"Mega River Otter","Mega Chestnut Glyptodon","Mega Ruddy Duck"},       -- Whitelist: names to release (empty = all)
     ExcludeReleasePets = {}, -- Blacklist: base names or prefixed like ReleasePets ("Neon Dog", "Normal Cat", "Mega FG X")
     ReleaseTypes = {},      -- "Mega", "Neon", "Normal" (empty = all)
@@ -39,7 +39,7 @@ getgenv().VO_CONFIG = {
 
     -- === AUTO FUSE ===
     AutoFuse = true,
-    AutoFuseBlacklist = {}, -- Pet names to never include in neon/mega fusion
+    AutoFuseBlacklist = {"Emberlight"}, -- Pet names to never include in neon/mega fusion
 
     -- === BUY PETS ===
     BuyPets = true,
