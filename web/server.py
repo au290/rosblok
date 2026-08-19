@@ -482,6 +482,35 @@ def _merge_monitor_inventory(incoming: object) -> None:
             monitor_inventory.pop(account, None)
 
 
+def _monitor_price_inventory_snapshot() -> tuple[str, dict[str, dict]]:
+    """Build a versioned, display-name-only catalog for phone price workers."""
+    now = time.time()
+    by_type: dict[str, dict] = {}
+    for account, data in monitor_inventory.items():
+        if now - float(monitor_inventory_seen.get(account, 0)) > INVENTORY_GRACE:
+            continue
+        if not isinstance(data, dict):
+            continue
+        groups = (data.get("pets", {}).get("by_type", {}) or {})
+        if not isinstance(groups, dict):
+            continue
+        for key, value in groups.items():
+            if not isinstance(value, dict):
+                continue
+            display_name = str(value.get("display_name") or "").strip()
+            kind = str(value.get("kind") or "").strip()
+            if not display_name or not kind:
+                continue
+            by_type[str(key)] = {
+                "kind": kind,
+                "display_name": display_name,
+            }
+    snapshot = {"catalog": {"pets": {"by_type": by_type}}} if by_type else {}
+    encoded = json.dumps(snapshot, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    version = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    return version, snapshot
+
+
 def _rejoin_snapshot() -> dict:
     """Return the latest listener ratio without exposing account identities."""
     received_at = float(rejoin_stats.get("received_at", 0.0) or 0.0)
@@ -592,7 +621,14 @@ async def handle_poll(request: web.Request) -> web.Response:
     _merge_report(phone, body)
     pending = jobs[phone]
     jobs[phone] = []
-    return web.json_response({"jobs": pending})
+    # The price worker runs on the phone, while monitor_adoptme posts directly
+    # to this server. Synchronize only the compact official-name catalog, and
+    # send it again only when its content changes.
+    price_version, price_inventory = _monitor_price_inventory_snapshot()
+    response = {"jobs": pending, "price_inventory_version": price_version}
+    if str(body.get("price_inventory_version") or "") != price_version:
+        response["price_inventory"] = price_inventory
+    return web.json_response(response)
 
 
 async def handle_monitor_poll(request: web.Request) -> web.Response:

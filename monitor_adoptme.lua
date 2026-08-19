@@ -13,7 +13,7 @@ repeat task.wait() until game:IsLoaded()
 task.wait(3)
 
 local VPS_URL  = "http://agent.kqing.web.id" -- no trailing slash
-local KEY      = "CHANGE_ME_SHARED_SECRET" -- must match web/config.txt
+local KEY      = "MxGVtCM9nfUDMddY4JxbeqxoPps8bcmzqer7Hp4WsMM" -- must match web/config.txt
 local INTERVAL = 30
 local FG_AGE   = 5                         -- ages 0..5 (Newborn..Full Grown)
 local LP       = Players.LocalPlayer

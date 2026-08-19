@@ -217,6 +217,12 @@ The VPS is only a control and display layer. A saved rotation keeps running
 from shared device storage while the VPS is offline. After the VPS restarts,
 the next agent poll restores the saved links in the web dashboard.
 
+The authenticated agent poll response also synchronizes a compact, versioned
+catalog from the direct monitors back to the phone price worker. This keeps
+StarPets searches, price cache keys, and price logs on verified
+`ClientDB.ItemDB` display names; legacy kind-only files in `Workspace/inv` are
+not used for pricing.
+
 ## Direct Adopt Me inventory reporting
 
 For a read-only inventory inspection, install `debug_adoptme_pets.lua` in the

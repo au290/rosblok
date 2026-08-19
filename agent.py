@@ -1131,6 +1131,56 @@ def read_inv() -> dict:
     return out
 
 
+# monitor_adoptme.lua reports directly to the VPS. The server echoes the
+# current grouped reports in the authenticated agent poll response so the
+# phone-side price worker can use the same verified display names.
+_REMOTE_INVENTORY_LOCK = threading.RLock()
+_REMOTE_INVENTORY: dict[str, dict] = {}
+_REMOTE_INVENTORY_VERSION = ""
+
+
+def _set_remote_inventory(value: object, version: object = "") -> None:
+    global _REMOTE_INVENTORY_VERSION
+    if not isinstance(value, dict):
+        return
+    clean = {
+        str(account): data
+        for account, data in value.items()
+        if isinstance(data, dict)
+    }
+    with _REMOTE_INVENTORY_LOCK:
+        _REMOTE_INVENTORY.clear()
+        _REMOTE_INVENTORY.update(clean)
+        _REMOTE_INVENTORY_VERSION = str(version or "")
+
+
+def _remote_inventory_version() -> str:
+    with _REMOTE_INVENTORY_LOCK:
+        return _REMOTE_INVENTORY_VERSION
+
+
+def _price_inventory() -> list[dict]:
+    """Return monitor reports, with legacy files only as a named-data fallback."""
+    with _REMOTE_INVENTORY_LOCK:
+        remote = list(_REMOTE_INVENTORY.values())
+        synced = bool(_REMOTE_INVENTORY_VERSION)
+    if synced:
+        return remote
+
+    # Old inv files contain canonical kinds only. Do not feed those to the
+    # price API because that recreates the old identifier format; accept only
+    # files already carrying the verified display_name field.
+    named = []
+    for data in read_inv().values():
+        if not isinstance(data, dict):
+            continue
+        groups = (data.get("pets") or {}).get("by_type") or {}
+        if any(isinstance(item, dict) and str(item.get("display_name") or "").strip()
+               for item in groups.values()):
+            named.append(data)
+    return named
+
+
 # ─────────────── StarPets pricing (fetched here — phones reach the API cleanly) ───────────────
 # The VPS host does TLS interception, so pricing lives on the phone. We fetch floor prices for
 # this phone's pets in a background thread and include them in each poll for the VPS to merge.
@@ -1143,15 +1193,11 @@ _SP_HEADERS = {
 }
 PRICES_FILE = RUN_DIR / "prices.json"
 PRICES = {}
-RARITIES = {}          # realName -> rarity (from StarPets), sent to the VPS for /pets colors
+RARITIES = {}          # official display name -> rarity, sent to the VPS for /pets colors
 PRICE_LOG = []         # recent price-worker log lines, surfaced by /pricelog
 PRICE_TS = {}          # pk -> last fetch time (in-memory; empty on restart => refetch all)
 PRICE_TTL = 3600       # re-fetch each price at most once per hour
 INTERVAL_PRICE = 120   # price-worker scan cadence (new pets + /refetch land within this)
-SP_WORD_ALIASES = {    # word-level remap: Adopt Me names a pet-word differently than StarPets.
-                       # Applied per-word on the year-stripped name (so acorn_wizard -> oakee_wizard).
-    "acorn": "oakee",  # summer_2026_acorn_wizard on AM = oakee_wizard on StarPets
-}
 if PRICES_FILE.exists():
     try:
         PRICES = json.loads(PRICES_FILE.read_text())
@@ -1173,72 +1219,107 @@ def _plog(msg):
     print(f"[price {PHONE}] {line}", flush=True)
 
 
-def _sp_floor(real_name: str, pumping: str):
-    """(floor USD, rarity) for this pet + variant, or (None, None). Adopt Me prefixes
-    event/egg pets; StarPets realName is sometimes the full kind, sometimes the bare name —
-    search by the year-stripped name and match realName against both. Logs failures."""
-    stripped = re.sub(r"^.*?\d{4}_", "", real_name)
-    stripped = "_".join(SP_WORD_ALIASES.get(w, w) for w in stripped.split("_"))  # remap per word
-    # match on the name with underscores stripped: Adopt Me's kind and StarPets' realName
-    # split words differently (dragonfruit_fox vs dragon_fruit_fox; frostbite_bear vs frostbitebear)
-    norm = lambda s: (s or "").replace("_", "").lower()
-    names = {norm(real_name), norm(stripped)}
-    body = json.dumps({"filter": {"name": stripped.replace("_", " "),
+def _sp_norm(value: object) -> str:
+    """Compare names independent of spaces, underscores, or punctuation."""
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _sp_floor(display_name: str, pumping: str):
+    """Return the StarPets floor and rarity for an official ItemDB name."""
+    display_name = str(display_name or "").strip()
+    names = {_sp_norm(display_name)}
+    last_error = None
+    last_count = 0
+    body = json.dumps({"filter": {"name": display_name,
                                   "types": [{"type": t} for t in ("pet", "egg")]},
                        "page": 1, "amount": 50, "currency": "usd",
                        "sort": {"popularity": "desc"}}).encode()
-    items, last_err = [], None
-    for attempt in range(3):                            # the API 400s intermittently
+    items = []
+    for _attempt in range(3):                             # the API 400s intermittently
         try:
             req = urllib.request.Request(_SP_URL, data=body, headers=_SP_HEADERS)
-            with urllib.request.urlopen(req, timeout=30) as r:
-                items = json.load(r).get("items", [])
+            with urllib.request.urlopen(req, timeout=30) as response:
+                items = json.load(response).get("items", [])
+            last_error = None
             break
-        except Exception as e:
-            last_err = e
+        except Exception as exc:
+            last_error = exc
             time.sleep(2)
-    if not items:
-        if last_err is None:                            # 200 OK but StarPets returned nothing
-            _plog(f"{real_name}: no listings (search='{stripped}')")
-        else:
-            _plog(f"{real_name}: fetch failed ({last_err})")
-        return None, None
-    matches = [it for it in items if norm(it.get("realName")) in names
-               and (it.get("pumping") or "default") == pumping and it.get("price")]
-    if not matches:
-        _plog(f"{real_name}|{pumping}: 0 matches in {len(items)} results (search='{stripped}')")
-        return None, None
-    floor = min(it["price"] for it in matches)
-    rarity = matches[0].get("rare")
-    return floor, rarity
+
+    last_count = len(items)
+    matches = [item for item in items
+               if _sp_norm(item.get("realName")) in names
+               and (item.get("pumping") or "default") == pumping
+               and item.get("price")]
+    if matches:
+        floor = min(item["price"] for item in matches)
+        rarity = matches[0].get("rare")
+        return floor, rarity
+
+    if last_error is not None and last_count == 0:
+        _plog(f"{display_name}: fetch failed ({last_error})")
+    elif last_count == 0:
+        _plog(f"{display_name}: no listings")
+    else:
+        _plog(f"{display_name}|{pumping}: 0 matches in {last_count} results")
+    return None, None
 
 
 def price_worker():
     """Background loop: fetch + cache StarPets floors + rarity for this phone's pets."""
+    time.sleep(5)  # allow the first authenticated poll to deliver monitor data
     _plog(f"started (VPS <- prices from this phone)")
     while True:
         try:
-            keys = set()
-            for d in read_inv().values():
+            # Keep the canonical kind and verified display name together. The
+            # display name is the only public lookup/cache key.
+            price_requests = {}
+            for d in _price_inventory():
                 if isinstance(d, dict):
-                    keys.update((d.get("pets") or {}).get("by_type") or {})
+                    for key, value in ((d.get("pets") or {}).get("by_type") or {}).items():
+                        if not isinstance(value, dict):
+                            continue
+                        kind, pumping = _key_variant(str(key))
+                        official = str(value.get("display_name") or "").strip()
+                        lookup = official
+                        if lookup:
+                            price_requests[(lookup, "default" if pumping == "default" else "mega_neon")] = (kind, official)
+            changed = False
+            # Migrate a previously cached kind key once the monitor supplies
+            # its official display name. This prevents old identifiers from
+            # continuing to be sent to the VPS after an upgrade.
+            for (lookup, variant), (kind, official) in price_requests.items():
+                if not official or kind == official:
+                    continue
+                old_key = f"{kind}|{variant}"
+                new_key = f"{lookup}|{variant}"
+                if old_key in PRICES:
+                    if new_key not in PRICES:
+                        PRICES[new_key] = PRICES[old_key]
+                    del PRICES[old_key]
+                    changed = True
             # value rule (4 neons = 1 mega): normals priced at default, neon+mega at mega_neon
-            need = set()
-            for k in keys:
-                rn, pump = _key_variant(k)
-                need.add((rn, "default" if pump == "default" else "mega_neon"))
+            need = set(price_requests)
+            if _remote_inventory_version():
+                active_keys = {f"{lookup}|{variant}" for lookup, variant in need}
+                for cached_key in list(PRICES):
+                    if cached_key not in active_keys:
+                        del PRICES[cached_key]
+                        changed = True
             now = time.time()
-            todo = [(rn, vv) for rn, vv in need if now - PRICE_TS.get(f"{rn}|{vv}", 0) > PRICE_TTL]
-            _plog(f"scan: {len(keys)} kinds, {len(need)} price-keys, {len(todo)} to (re)fetch, {len(PRICES)} cached")
-            ok, changed = 0, False
-            for rn, vv in todo:
-                pk = f"{rn}|{vv}"
-                price, rarity = _sp_floor(rn, vv)
+            todo = [(lookup, variant) for lookup, variant in need
+                    if now - PRICE_TS.get(f"{lookup}|{variant}", 0) > PRICE_TTL]
+            _plog(f"scan: {len(price_requests)} official names, {len(todo)} to (re)fetch, {len(PRICES)} cached")
+            ok = 0
+            for lookup, vv in todo:
+                rn, official = price_requests[(lookup, vv)]
+                pk = f"{lookup}|{vv}"
+                price, rarity = _sp_floor(official, vv)
                 PRICE_TS[pk] = time.time()              # mark attempted (success or fail) so it respects TTL
                 if price is not None:
                     PRICES[pk] = price; ok += 1; changed = True
                     if rarity:
-                        RARITIES[rn] = rarity
+                        RARITIES[lookup] = rarity
                     _plog(f"{pk} = ${price} ({rarity})")
                 time.sleep(1)                           # be gentle on the API
             if changed:
@@ -1343,12 +1424,22 @@ def poll(results: list) -> list:
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
                        "trades": trades, "accounts": accounts,
+                       "price_inventory_version": _remote_inventory_version(),
                        "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
                                  headers={"Content-Type": "application/json", "X-Key": KEY,
                                           "User-Agent": "Mozilla/5.0 (hopperbot)"})  # dodge Cloudflare's Python-urllib ban (err 1010)
     with urllib.request.urlopen(req, timeout=25) as r:
-        return json.loads(r.read().decode()).get("jobs", [])
+        response = json.loads(r.read().decode())
+    if isinstance(response, dict):
+        if "price_inventory" in response:
+            _set_remote_inventory(
+                response.get("price_inventory"),
+                response.get("price_inventory_version"),
+            )
+        jobs = response.get("jobs", [])
+        return jobs if isinstance(jobs, list) else []
+    return []
 
 
 def main():
