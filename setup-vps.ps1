@@ -256,7 +256,20 @@ $Server = Join-Path $AppDir "web\server.py"
 [IO.File]::WriteAllText($PidFile, [string]$PID)
 try {
     Set-Location $AppDir
-    & $Python $Server *>> $LogFile
+    while ($true) {
+        $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -LiteralPath $LogFile -Value "[$started] supervisor starting server.py"
+        try {
+            & $Python $Server *>> $LogFile
+            $exitCode = $LASTEXITCODE
+        } catch {
+            $_ | Out-String | Add-Content -LiteralPath $LogFile
+            $exitCode = 1
+        }
+        $stopped = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -LiteralPath $LogFile -Value "[$stopped] server.py exited with code $exitCode; restarting in 5 seconds"
+        Start-Sleep -Seconds 5
+    }
 } finally {
     if ((Test-Path $PidFile) -and ((Get-Content $PidFile -Raw).Trim() -eq [string]$PID)) {
         Remove-Item $PidFile -Force
@@ -291,7 +304,7 @@ if ($isAdmin -and (Get-Command Register-ScheduledTask -ErrorAction SilentlyConti
     if ($existing) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
     $action = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $LauncherArgs -WorkingDirectory $InstallDir
     $trigger = New-ScheduledTaskTrigger -AtStartup
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -User "SYSTEM" -RunLevel Highest -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
     Write-Step "registered and started scheduled task $taskName"
