@@ -24,6 +24,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from collections import deque
 
+AGENT_VERSION = "2026.08.19.1"
+
 # ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
 VPS_URL  = "http://agent.kqing.web.id" # public web server endpoint
 KEY      = "CHANGE_ME_SHARED_SECRET"   # must match server.py KEY
@@ -1137,6 +1139,8 @@ def read_inv() -> dict:
 _REMOTE_INVENTORY_LOCK = threading.RLock()
 _REMOTE_INVENTORY: dict[str, dict] = {}
 _REMOTE_INVENTORY_VERSION = ""
+_SERVER_VERSION = ""
+PRICE_WAKE = threading.Event()
 
 
 def _set_remote_inventory(value: object, version: object = "") -> None:
@@ -1148,15 +1152,41 @@ def _set_remote_inventory(value: object, version: object = "") -> None:
         for account, data in value.items()
         if isinstance(data, dict)
     }
+    incoming_version = str(version or "")
     with _REMOTE_INVENTORY_LOCK:
+        changed = incoming_version != _REMOTE_INVENTORY_VERSION
         _REMOTE_INVENTORY.clear()
         _REMOTE_INVENTORY.update(clean)
-        _REMOTE_INVENTORY_VERSION = str(version or "")
+        _REMOTE_INVENTORY_VERSION = incoming_version
+    if changed:
+        PRICE_WAKE.set()
+
+
+def _set_server_version(value: object) -> None:
+    global _SERVER_VERSION
+    with _REMOTE_INVENTORY_LOCK:
+        _SERVER_VERSION = str(value or "").strip()[:40]
+
+
+def _server_version() -> str:
+    with _REMOTE_INVENTORY_LOCK:
+        return _SERVER_VERSION
 
 
 def _remote_inventory_version() -> str:
     with _REMOTE_INVENTORY_LOCK:
         return _REMOTE_INVENTORY_VERSION
+
+
+def _remote_inventory_count() -> int:
+    with _REMOTE_INVENTORY_LOCK:
+        rows = list(_REMOTE_INVENTORY.values())
+    return sum(
+        1
+        for data in rows
+        for value in (((data.get("pets") or {}).get("by_type") or {}).values())
+        if isinstance(value, dict) and str(value.get("display_name") or "").strip()
+    )
 
 
 def _price_inventory() -> list[dict]:
@@ -1330,7 +1360,8 @@ def price_worker():
             _plog(f"done: {ok}/{len(todo)} priced, {len(PRICES)} total")
         except Exception as e:
             _plog(f"worker error: {e}")
-        time.sleep(INTERVAL_PRICE)                      # rescan (new pets + TTL refresh + /refetch)
+        PRICE_WAKE.wait(INTERVAL_PRICE)
+        PRICE_WAKE.clear()
 
 
 # ─────────────────────────── job dispatch ───────────────────────────
@@ -1344,11 +1375,19 @@ def dispatch(cmd: str) -> str:
             raise ValueError("rotation_set requires hopper and config")
         return set_rotation(int(a[0]), json.loads(a[1]))
     if v == "pricelog":
-        return (f"prices cached: {len(PRICES)} · rarities: {len(RARITIES)}\n"
+        return (f"agent {AGENT_VERSION} · server {_server_version() or 'unknown'}\n"
+                f"catalog {_remote_inventory_version() or 'not synced'} · {_remote_inventory_count()} official names\n"
+                f"prices cached: {len(PRICES)} · rarities: {len(RARITIES)}\n"
                 + ("\n".join(PRICE_LOG[-24:]) or "(no price activity yet)"))
+    if v == "version":
+        return (f"agent {AGENT_VERSION}\n"
+                f"server {_server_version() or 'unknown'}\n"
+                f"catalog {_remote_inventory_version() or 'not synced'} "
+                f"({_remote_inventory_count()} official names)")
     if v == "refetch":
         PRICE_TS.clear()                                 # mark all stale -> next scan re-fetches
-        return f"marked {len(PRICES)} prices stale — re-fetching within {INTERVAL_PRICE}s"
+        PRICE_WAKE.set()
+        return f"marked {len(PRICES)} prices stale; price scan triggered now"
     if v == "start":     return start_hopper(int(a[0]))
     if v == "stop":      return stop_hopper(int(a[0]))
     if v == "restart":   stop_hopper(int(a[0])); return start_hopper(int(a[0]))
@@ -1424,6 +1463,7 @@ def poll(results: list) -> list:
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
                        "trades": trades, "accounts": accounts,
+                       "agent_version": AGENT_VERSION,
                        "price_inventory_version": _remote_inventory_version(),
                        "results": results}).encode()
     req = urllib.request.Request(f"{VPS_URL}/api/{PHONE}/poll", data=body, method="POST",
@@ -1432,6 +1472,7 @@ def poll(results: list) -> list:
     with urllib.request.urlopen(req, timeout=25) as r:
         response = json.loads(r.read().decode())
     if isinstance(response, dict):
+        _set_server_version(response.get("server_version"))
         if "price_inventory" in response:
             _set_remote_inventory(
                 response.get("price_inventory"),
@@ -1443,6 +1484,7 @@ def poll(results: list) -> list:
 
 
 def main():
+    print(f"[agent {PHONE}] version {AGENT_VERSION}", flush=True)
     print(f"[agent {PHONE}] polling {VPS_URL} every {INTERVAL}s")
     detected = detect_packages() if AUTO_DETECT_PACKAGES else []
     if AUTO_DETECT_PACKAGES:

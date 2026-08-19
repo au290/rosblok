@@ -242,7 +242,7 @@
         : "All hopper reports healthy";
       const issueClass = summary.attention.length ? " has-issues" : "";
       return `<article class="phone-card ${phone.online ? "" : "offline"}">
-        <div class="phone-card-head"><div><h3>Phone ${escapeHtml(phone.phone)}</h3><span class="phone-last-seen">Last seen ${escapeHtml(age)}</span></div><span class="status ${phone.online ? "online" : ""}">${phone.online ? "Online" : "Offline"}</span></div>
+        <div class="phone-card-head"><div><h3>Phone ${escapeHtml(phone.phone)}</h3><span class="phone-last-seen">Last seen ${escapeHtml(age)} &middot; Agent ${escapeHtml(phone.agent_version || "unknown")}</span></div><span class="status ${phone.online ? "online" : ""}">${phone.online ? "Online" : "Offline"}</span></div>
         <div class="phone-health">${healthHtml || `<span>No device health report</span>`}</div>
         <div class="phone-kpis"><div><strong>${integer(summary.running)}/${integer(summary.total)}</strong><span>hoppers ready</span></div><div><strong>${integer(summary.reporting)}</strong><span>trade reports</span></div><div><strong>${integer(summary.trades)}</strong><span>trades reported</span></div></div>
         <div class="phone-card-row"><span>Targets</span><div class="phone-chips">${targetHtml}</div></div>
@@ -553,7 +553,7 @@
     renderPhones(phones, "hopper-phone-cards", data.hoppers || []);
     renderInventory(data.inventory);
     renderPets(data.pets);
-    $("sidebar-updated").textContent = pollingIsActive() ? "Live updates" : "Paused while tab is inactive";
+    $("sidebar-updated").textContent = `Server ${data.server_version || "unknown"} · ${pollingIsActive() ? "Live updates" : "Paused"}`;
   }
 
   async function refresh() {

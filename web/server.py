@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 
+SERVER_VERSION = "2026.08.19.1"
 BASE_DIR = Path(__file__).resolve().parent
 ASSET_DIR = BASE_DIR / "assets"
 HOPPER_META_FILE = BASE_DIR / "hoppers.json"
@@ -160,6 +161,7 @@ reports: dict[str, dict] = {
         "rarities": {},
         "rotations": {},
         "trades": {},
+        "agent_version": "",
         "ts": 0.0,
     }
     for phone in PHONES
@@ -567,6 +569,8 @@ def _merge_report(phone: str, body: dict) -> None:
     for key in ("footer", "servers", "srv_now"):
         if key in body:
             report[key] = body[key]
+    if isinstance(body.get("agent_version"), str):
+        report["agent_version"] = body["agent_version"].strip()[:40]
     if isinstance(body.get("packages"), dict):
         report["packages"] = {
             str(number): str(package)
@@ -593,9 +597,9 @@ def _merge_report(phone: str, body: dict) -> None:
     # but its legacy inv payload must never populate Pet Register.
     if body.get("source") == "monitor_adoptme":
         _merge_monitor_inventory(body.get("inv"))
-    if body.get("prices"):
+    if isinstance(body.get("prices"), dict):
         report["prices"] = body["prices"]
-    if body.get("rarities"):
+    if isinstance(body.get("rarities"), dict):
         report["rarities"] = body["rarities"]
     report["ts"] = now
 
@@ -625,7 +629,11 @@ async def handle_poll(request: web.Request) -> web.Response:
     # to this server. Synchronize only the compact official-name catalog, and
     # send it again only when its content changes.
     price_version, price_inventory = _monitor_price_inventory_snapshot()
-    response = {"jobs": pending, "price_inventory_version": price_version}
+    response = {
+        "jobs": pending,
+        "server_version": SERVER_VERSION,
+        "price_inventory_version": price_version,
+    }
     if str(body.get("price_inventory_version") or "") != price_version:
         response["price_inventory"] = price_inventory
     return web.json_response(response)
@@ -735,6 +743,7 @@ def _report_view(phone: str) -> dict:
         "rarities": report.get("rarities", {}),
         "rotations": report.get("rotations", {}),
         "trades": report.get("trades", {}),
+        "agent_version": report.get("agent_version", ""),
     }
 
 
@@ -959,6 +968,7 @@ def _status_payload(phone: str) -> dict:
             }
         )
     return {
+        "server_version": SERVER_VERSION,
         "generated_at": time.time(),
         "selected_phone": phone,
         "available_phones": PHONES,
@@ -1046,7 +1056,7 @@ def build_command(body: dict) -> str:
         return _rotation_command(body)
     if action in {"start", "stop", "restart"}:
         return f"{action} {_required_int(body, 'hopper')}"
-    if action in {"startall", "stopall", "assigns", "continue", "refetch", "pricelog"}:
+    if action in {"startall", "stopall", "assigns", "continue", "refetch", "pricelog", "version"}:
         return action
     if action == "logs":
         lines = _required_int(body, "lines", 1)
@@ -1153,6 +1163,7 @@ if __name__ == "__main__":
         raise SystemExit("Set KEY in web/config.txt before starting the web server.")
     if WEB_TOKEN.startswith("CHANGE_ME"):
         raise SystemExit("Set WEB_TOKEN in web/config.txt or web/web_token.txt before starting the web server.")
+    print(f"[web] version: {SERVER_VERSION}")
     print(f"[web] dashboard: http://127.0.0.1:{PORT}/")
     print(f"[web] agent poll endpoint: /api/{{phone}}/poll")
     print("[web] monitor poll endpoint: /api/monitor/poll")
