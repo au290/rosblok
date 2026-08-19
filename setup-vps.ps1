@@ -251,6 +251,8 @@ $ErrorActionPreference = "Stop"
 $AppDir = $PSScriptRoot
 $PidFile = Join-Path $AppDir "web\server.pid"
 $LogFile = Join-Path $AppDir "web\server.log"
+$StdoutFile = Join-Path $AppDir "web\server.stdout.tmp.log"
+$StderrFile = Join-Path $AppDir "web\server.stderr.tmp.log"
 $Python = Join-Path $AppDir ".venv\Scripts\python.exe"
 $Server = Join-Path $AppDir "web\server.py"
 [IO.File]::WriteAllText($PidFile, [string]$PID)
@@ -260,11 +262,24 @@ try {
         $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         Add-Content -LiteralPath $LogFile -Value "[$started] supervisor starting server.py"
         try {
-            & $Python $Server *>> $LogFile
-            $exitCode = $LASTEXITCODE
+            Remove-Item -LiteralPath $StdoutFile,$StderrFile -Force -ErrorAction SilentlyContinue
+            $process = Start-Process -FilePath $Python `
+                -ArgumentList @("-u", "`"$Server`"") `
+                -WorkingDirectory $AppDir `
+                -RedirectStandardOutput $StdoutFile `
+                -RedirectStandardError $StderrFile `
+                -PassThru -WindowStyle Hidden
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
         } catch {
-            $_ | Out-String | Add-Content -LiteralPath $LogFile
+            ("launcher error: " + ($_ | Out-String)) | Add-Content -LiteralPath $LogFile
             $exitCode = 1
+        }
+        foreach ($streamFile in @($StdoutFile, $StderrFile)) {
+            if (Test-Path -LiteralPath $streamFile) {
+                Get-Content -LiteralPath $streamFile -ErrorAction SilentlyContinue | Add-Content -LiteralPath $LogFile
+                Remove-Item -LiteralPath $streamFile -Force -ErrorAction SilentlyContinue
+            }
         }
         $stopped = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         Add-Content -LiteralPath $LogFile -Value "[$stopped] server.py exited with code $exitCode; restarting in 5 seconds"
