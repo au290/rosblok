@@ -357,12 +357,40 @@ $ErrorActionPreference = "Stop"
 $AppDir = $PSScriptRoot
 $PidFile = Join-Path $AppDir "web\rejoin_listener.pid"
 $LogFile = Join-Path $AppDir "web\rejoin_listener.log"
+$StdoutFile = Join-Path $AppDir "web\rejoin_listener.stdout.tmp.log"
+$StderrFile = Join-Path $AppDir "web\rejoin_listener.stderr.tmp.log"
 $Python = Join-Path $AppDir ".venv\Scripts\python.exe"
 $Script = Join-Path $AppDir "web\rejoin_listener.py"
 [IO.File]::WriteAllText($PidFile, [string]$PID)
 try {
     Set-Location (Join-Path $AppDir "web")
-    & $Python $Script *>> $LogFile
+    while ($true) {
+        $started = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -LiteralPath $LogFile -Value "[$started] supervisor starting rejoin_listener.py"
+        try {
+            Remove-Item -LiteralPath $StdoutFile,$StderrFile -Force -ErrorAction SilentlyContinue
+            $process = Start-Process -FilePath $Python `
+                -ArgumentList @("-u", "`"$Script`"") `
+                -WorkingDirectory (Join-Path $AppDir "web") `
+                -RedirectStandardOutput $StdoutFile `
+                -RedirectStandardError $StderrFile `
+                -PassThru -WindowStyle Hidden
+            $process.WaitForExit()
+            $exitCode = $process.ExitCode
+        } catch {
+            ("launcher error: " + ($_ | Out-String)) | Add-Content -LiteralPath $LogFile
+            $exitCode = 1
+        }
+        foreach ($streamFile in @($StdoutFile, $StderrFile)) {
+            if (Test-Path -LiteralPath $streamFile) {
+                Get-Content -LiteralPath $streamFile -ErrorAction SilentlyContinue | Add-Content -LiteralPath $LogFile
+                Remove-Item -LiteralPath $streamFile -Force -ErrorAction SilentlyContinue
+            }
+        }
+        $stopped = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -LiteralPath $LogFile -Value "[$stopped] rejoin_listener.py exited with code $exitCode; restarting in 5 seconds"
+        Start-Sleep -Seconds 5
+    }
 } finally {
     if ((Test-Path $PidFile) -and ((Get-Content $PidFile -Raw).Trim() -eq [string]$PID)) {
         Remove-Item $PidFile -Force
@@ -387,7 +415,7 @@ try {
             if ($existingListenerTask) { Stop-ScheduledTask -TaskName $listenerTaskName -ErrorAction SilentlyContinue }
             $listenerAction = New-ScheduledTaskAction -Execute $PowerShellExe -Argument $ListenerArgs -WorkingDirectory $InstallDir
             $listenerTrigger = New-ScheduledTaskTrigger -AtStartup
-            $listenerSettings = New-ScheduledTaskSettingsSet -RestartCount 5 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+            $listenerSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd
             Register-ScheduledTask -TaskName $listenerTaskName -Action $listenerAction -Trigger $listenerTrigger -Settings $listenerSettings -User "SYSTEM" -RunLevel Highest -Force | Out-Null
             Start-ScheduledTask -TaskName $listenerTaskName
             Write-Step "registered and started scheduled task $listenerTaskName"

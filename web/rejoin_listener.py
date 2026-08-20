@@ -267,6 +267,12 @@ def main() -> int:
             print(f"[rejoin-listener] {exc}", file=sys.stderr, flush=True)
             if args.once:
                 return 1
+        except Exception as exc:
+            # Keep a malformed upstream response or an unexpected local I/O
+            # error from terminating the long-running scheduled task.
+            print(f"[rejoin-listener] unexpected error: {exc!r}", file=sys.stderr, flush=True)
+            if args.once:
+                return 1
         if args.once:
             return 0
         time.sleep(interval)
