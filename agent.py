@@ -24,7 +24,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from collections import deque
 
-AGENT_VERSION = "2026.08.19.1"
+AGENT_VERSION = "2026.08.21.3"
 
 # ─────────────────────────── CONFIG — EDIT THIS ───────────────────────────
 VPS_URL  = "http://agent.kqing.web.id" # public web server endpoint
@@ -54,6 +54,9 @@ AUTOEXEC = Path("/storage/emulated/0/Arceus X/Autoexecute")
 # requiring any addon changes.
 TRADE_DIRS = [
     INV_DIR,
+    # writefile("name_winteraddons.json") commonly resolves to the executor's
+    # workspace root rather than its inventory subdirectory.
+    Path("/storage/emulated/0/Arceus X/Workspace"),
     Path("/storage/emulated/0/Delta/Workspace/inv"),
     Path("/storage/emulated/0/Delta/Workspace"),
     BASE_DIR,
@@ -117,6 +120,7 @@ _ACCOUNT_LOCK = threading.Lock()
 _ACCOUNT_CACHE: dict[str, tuple[float, str]] = {}
 _USER_ID_CACHE: dict[str, str] = {}
 ACCOUNT_CACHE_TTL = 60
+ACCOUNT_REFRESH_SECONDS = 15
 
 
 def detect_packages(refresh: bool = False) -> list[str]:
@@ -191,7 +195,7 @@ def _runtime(n: int) -> dict:
                 "last_launch": 0.0, "last_health": 0.0,
                 "trade": None, "trade_launch_at": 0.0, "trade_started_at": 0.0,
                 "trade_session_seen": False,
-                "trade_retry_at": 0.0, "trade_file": "",
+                "trade_retry_at": 0.0, "trade_file": "", "package_account": "",
                 "logs": deque(maxlen=80),
             }
             log_file = RUN_DIR / f"hopper{n}.log"
@@ -374,7 +378,7 @@ def _normalise_trade(raw: object, path: Path, now: float) -> dict | None:
 
 
 def read_trade_status(state: dict, now: float | None = None) -> dict | None:
-    """Read the newest valid heartbeat for this hopper without persisting it."""
+    """Read the live heartbeat belonging to this hopper's Roblox package."""
     now = time.time() if now is None else now
     directories = _trade_dirs_for(state)
     package_files: list[Path] = []
@@ -386,7 +390,11 @@ def read_trade_status(state: dict, now: float | None = None) -> dict | None:
             shared_files.extend(files)
         else:
             package_files.extend(files)
-    files = package_files or shared_files
+    # Keep both scopes in the candidate set.  A previous Roblox session can
+    # leave a package-private heartbeat behind while the current executor
+    # writes its live file in shared storage; choosing ``package_files``
+    # exclusively would hide that valid file until the old one disappeared.
+    files = package_files + shared_files
     candidates: list[tuple[dict, Path]] = []
     seen: set[str] = set()
     for path in files:
@@ -405,6 +413,66 @@ def read_trade_status(state: dict, now: float | None = None) -> dict | None:
             candidates.append((status, path))
     if not candidates:
         return None
+
+    # A launch starts a new Roblox session.  Do not attach the new session to
+    # a heartbeat left behind by the previous account/server.  Heartbeat files
+    # use os.time(), so only a timestamp at or after the next whole second can
+    # belong to this launch. Keeping this filter here also prevents an old file
+    # from being selected and then pinned by ``current_file`` below.
+    launched = state.get("trade_launch_at") or state.get("last_launch") or 0
+    if launched:
+        launch_second = math.ceil(float(launched))
+        candidates = [
+            item for item in candidates
+            if float(item[0].get("ts", 0)) >= launch_second
+        ]
+        if not candidates:
+            state["trade_file"] = ""
+            return None
+
+    # All executor clones may write into one shared workspace. The filename
+    # carries the Roblox username, while prefs.xml belongs to exactly one
+    # Android package. Match those values before timestamp/unclaimed-file
+    # fallbacks so another clone's heartbeat cannot satisfy this hopper.
+    expected_account = package_account_name(str(state.get("package") or ""))
+    if expected_account:
+        expected_key = expected_account.casefold()
+        previous_account = str(state.get("package_account") or "").casefold()
+        if previous_account and previous_account != expected_key:
+            # A package can be logged out and into another Roblox account
+            # without Android killing its process. Treat that as a new script
+            # session so a recently written heartbeat for the new account is
+            # not mistaken for proof that its current Lua script has loaded.
+            state.update({
+                "trade": None,
+                "trade_file": "",
+                # Record the new identity before returning while waiting for
+                # its first heartbeat; otherwise every poll repeats the
+                # account-switch reset and keeps moving the launch boundary.
+                "package_account": expected_account,
+                "trade_launch_at": now,
+                "trade_started_at": 0.0,
+                "trade_session_seen": False,
+            })
+            switch_second = math.ceil(now)
+            candidates = [
+                item for item in candidates
+                if float(item[0].get("ts", 0)) >= switch_second
+            ]
+            _log(state, "Roblox account changed; waiting for its fresh heartbeat")
+            if not candidates:
+                return None
+        state["package_account"] = expected_account
+        matching = []
+        for status, path in candidates:
+            match = re.fullmatch(r"(.+)_winteraddons\.json", path.name, re.I)
+            if match and match.group(1).casefold() == expected_key:
+                matching.append((status, path))
+        if not matching:
+            state["trade_file"] = ""
+            return None
+        candidates = matching
+
     current_file = state.get("trade_file", "")
     for status, path in candidates:
         if current_file and str(path) == current_file:
@@ -537,6 +605,9 @@ def _launch_locked(
     state.update({"actual": True, "link": str(link).strip(), "deep_link": target,
                   "last_launch": launched_at, "last_health": launched_at,
                   "package_seen_running": False, "trade": None,
+                  # Never carry a previous account's heartbeat assignment
+                  # into a newly launched Roblox session.
+                  "trade_file": "", "package_account": "",
                   "trade_launch_at": launched_at,
                   "trade_session_seen": False,
                   "trade_started_at": 0.0, "trade_retry_at": retry_at})
@@ -592,6 +663,8 @@ def stop_hopper(n: int) -> str:
         state["actual"] = False
         state["package_seen_running"] = False
         state["trade"] = None
+        state["trade_file"] = ""
+        state["package_account"] = ""
         state["trade_launch_at"] = 0
         state["trade_started_at"] = 0
         state["trade_session_seen"] = False
@@ -1001,14 +1074,48 @@ def trade_snapshot() -> dict:
                 snapshot[str(n)] = {"status": "stopped", "fresh": False}
                 continue
             trade = _refresh_trade_locked(state, now)
-            if trade is None or not state.get("trade_session_seen"):
+            package_ready = bool(state.get("package_seen_running") and state.get("actual"))
+            if trade is None or not state.get("trade_session_seen") or not package_ready:
                 snapshot[str(n)] = {
                     "status": "no script",
                     "fresh": False,
-                    "package_ready": bool(state.get("package_seen_running") and state.get("actual")),
+                    "package_ready": package_ready,
                 }
             else:
                 snapshot[str(n)] = dict(trade)
+    return snapshot
+
+
+def hopper_state_snapshot() -> dict:
+    """Return structured lifecycle state for the dashboard.
+
+    The board text is intentionally human-readable and is not a reliable
+    machine protocol: a target server can remain displayed while Android is
+    still opening the package or has already exited.  Report the authoritative
+    runtime flags alongside that text so the web UI cannot infer a false
+    ``running`` state from an ``RF1`` marker.
+    """
+    snapshot = {}
+    with _RUNTIME_LOCK:
+        for n in HOPPERS:
+            state = _runtime(n)
+            package_ready = bool(state.get("package_seen_running") and state.get("actual"))
+            if not state.get("desired"):
+                status = "stopped"
+            elif state.get("held"):
+                status = "held"
+            elif package_ready:
+                status = "running"
+            else:
+                status = "starting"
+            snapshot[str(n)] = {
+                "status": status,
+                "desired": bool(state.get("desired")),
+                "actual": bool(state.get("actual")),
+                "package_ready": package_ready,
+                "package_seen_running": bool(state.get("package_seen_running")),
+                "held": bool(state.get("held")),
+            }
     return snapshot
 
 
@@ -1119,7 +1226,7 @@ def account_worker() -> None:
                 package_account_name(package, refresh=True)
             except Exception:
                 pass
-        time.sleep(ACCOUNT_CACHE_TTL)
+        time.sleep(ACCOUNT_REFRESH_SECONDS)
 
 
 def read_inv() -> dict:
@@ -1445,6 +1552,7 @@ def safe(cmd: str) -> str:
 # ─────────────────────────── poll loop ───────────────────────────
 def poll(results: list) -> list:
     trades = trade_snapshot()
+    hopper_states = hopper_state_snapshot()
     board, footer, now = build_board()
     servers = sum(len(hopper_links(n)) for n in HOPPERS)   # total private servers in rotation
     packages = {
@@ -1463,6 +1571,7 @@ def poll(results: list) -> list:
                        "servers": servers, "srv_now": now, "packages": packages, "prices": PRICES,
                        "rarities": RARITIES, "rotations": rotation_snapshot(),
                        "trades": trades, "accounts": accounts,
+                       "hopper_states": hopper_states,
                        "agent_version": AGENT_VERSION,
                        "price_inventory_version": _remote_inventory_version(),
                        "results": results}).encode()

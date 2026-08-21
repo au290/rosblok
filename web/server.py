@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 from aiohttp import web
 
 
-SERVER_VERSION = "2026.08.19.1"
+SERVER_VERSION = "2026.08.21.3"
 BASE_DIR = Path(__file__).resolve().parent
 ASSET_DIR = BASE_DIR / "assets"
 HOPPER_META_FILE = BASE_DIR / "hoppers.json"
@@ -161,6 +161,7 @@ reports: dict[str, dict] = {
         "rarities": {},
         "rotations": {},
         "trades": {},
+        "hopper_states": {},
         "agent_version": "",
         "ts": 0.0,
     }
@@ -289,6 +290,29 @@ def _normalise_trade_report(value: object) -> dict | None:
                 if math.isfinite(count) and count >= 0:
                     clean_categories[str(name)[:80]] = int(count) if count.is_integer() else count
             result["meta"]["categories"] = clean_categories
+    return result
+
+
+def _normalise_hopper_states(value: object) -> dict[str, dict]:
+    """Validate structured lifecycle state reported by the phone agent."""
+    if not isinstance(value, dict):
+        return {}
+    allowed = {"stopped", "starting", "running", "held"}
+    result: dict[str, dict] = {}
+    for number, item in value.items():
+        if not re.fullmatch(r"\d+", str(number)) or not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip().lower()
+        if status not in allowed:
+            continue
+        result[str(number)] = {
+            "status": status,
+            "desired": bool(item.get("desired")),
+            "actual": bool(item.get("actual")),
+            "package_ready": bool(item.get("package_ready")),
+            "package_seen_running": bool(item.get("package_seen_running")),
+            "held": bool(item.get("held")),
+        }
     return result
 
 
@@ -592,6 +616,10 @@ def _merge_report(phone: str, body: dict) -> None:
             if re.fullmatch(r"\d+", str(number))
             and (trade := _normalise_trade_report(value)) is not None
         }
+    # Replace this snapshot on every agent poll.  Clearing it when an older
+    # agent omits the field is safer than retaining a lifecycle state from a
+    # previous process/session and showing it as current in the dashboard.
+    report["hopper_states"] = _normalise_hopper_states(body.get("hopper_states"))
     # Inventory is intentionally trusted only from the direct Adopt Me
     # monitor. The agent may still send hopper/control data on this endpoint,
     # but its legacy inv payload must never populate Pet Register.
@@ -743,6 +771,7 @@ def _report_view(phone: str) -> dict:
         "rarities": report.get("rarities", {}),
         "rotations": report.get("rotations", {}),
         "trades": report.get("trades", {}),
+        "hopper_states": report.get("hopper_states", {}),
         "agent_version": report.get("agent_version", ""),
     }
 
@@ -890,6 +919,15 @@ def _hopper_rows(phone: str) -> list[dict]:
                 state = "running"
             else:
                 state = "starting"
+            # Prefer the agent's structured lifecycle state.  The board keeps
+            # showing its current RF target while a package is opening (or
+            # after it has exited), so inferring "running" from the RF marker
+            # makes the card flicker and hides heartbeat failures.
+            reported_state = (report.get("hopper_states") or {}).get(str(number))
+            if isinstance(reported_state, dict) and reported_state.get("status") in {
+                "stopped", "starting", "running", "held"
+            }:
+                state = reported_state["status"]
             key = f"{target_phone}:{number}"
             item = metadata.get(key, {})
             if not isinstance(item, dict):

@@ -157,8 +157,19 @@ starts; otherwise start them from Hopper control.
 
 The phone agent watches the existing Swap/Trade addon heartbeat named
 `<username>_winteraddons.json`. No Lua changes or extra reporting script are
-required. It checks Delta's shared workspace and package-private executor
-workspace locations, using root access for cloned package storage when needed.
+required. It checks the executor's shared workspace roots (including Arceus X
+and Delta) and package-private executor workspace locations, using root access
+for cloned package storage when needed.
+
+When several clones share one executor workspace, the agent reads each
+package's local `prefs.xml` to determine its Roblox username, then accepts
+only that package's matching `<username>_winteraddons.json` file. No Lua
+configuration or per-clone workspace is required.
+
+The package identity is refreshed every 15 seconds. If a package is logged
+into a different Roblox account while it remains open, the agent clears its
+previous heartbeat assignment and waits for a new heartbeat from that account;
+it does not relaunch the package solely because the account changed.
 
 The heartbeat must contain `status` and Unix-seconds `ts`. A fresh `completed`
 status advances to the next saved server. Fresh `disconnected` or `error`
